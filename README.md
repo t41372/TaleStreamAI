@@ -18,8 +18,8 @@
 
 -   DeepSeek-V3
 -   gemini-2.0-flash
--   硅基智能-FunAudioLLM/CosyVoice2-0.5B
--   秋葉 aaaki forge 整合包
+-   Edge TTS
+-   flux 文生图 API
 
 ## 项目流程
 
@@ -28,15 +28,14 @@
 | main.py      | 获取书籍内容   | 无                       |
 | board.py     | 生成章节分镜   | gemini-2.0-flash         |
 | prompt.py    | 润色分镜提示词 | deepseek-v3              |
-| image.py     | 生成图片       | 秋葉 aaaki forge 版      |
-| audio.py     | 生成音频       | CosyVoice2-0.5B:benjamin |
-| tts.py       | 生成字幕       | 本地运行 whisper         |
+| image.py     | 生成图片       | flux API                |
+| audio.py     | 生成音频/字幕  | Edge TTS                |
 | video.py     | 生成视频       | ffmpeg-gpu 加速版        |
 | video_end.py | 生成完整视频   | ffmpeg-gpu 加速版        |
 
 ## 本地运行
 
-> 本项目使用的是`uv`来管理依赖,建议 python 版本`>=3.10`
+> 本项目使用的是`uv`来管理依赖,建议 python 版本`>=3.12`
 
 1. 安装`uv`
 
@@ -136,37 +135,3 @@ uv run video_end.py # 最终合成
 uv run main.py
 ```
 
-## Whisper 模型规格概览
-
-Whisper 模型规格
-| 模型规格 | 参数量 | 最低显存要求 |
-|---------|-------|------------|
-| Tiny | 39M | ~1GB |
-| Base | 74M | ~1GB |
-| Small | 244M | ~2GB |
-| Medium | 769M | ~5GB |
-| Large | 1550M | ~10GB |
-| Large-v2| 1550M | ~10GB |
-| Large-v3| 1550M | ~10GB |
-
-3. **运行示例代码**
-可以先写个测试，运行示例代码来下载 Whisper
-```python
-import torch
-from transformers import WhisperProcessor, WhisperForConditionalGeneration
-
-# 选择适合您显存的模型大小，例如"medium"
-model_id = "openai/whisper-medium"
-
-# 启用半精度以节省显存
-processor = WhisperProcessor.from_pretrained(model_id)
-model = WhisperForConditionalGeneration.from_pretrained(
-    model_id,
-    torch_dtype=torch.float16,
-    device_map="auto"
-)
-
-# 确保模型在GPU上运行
-device = "cuda" if torch.cuda.is_available() else "cpu"
-model = model.to(device)
-```
