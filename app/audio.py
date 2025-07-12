@@ -1,4 +1,4 @@
-import requests
+import asyncio
 from dotenv import load_dotenv
 import os
 import json
@@ -7,7 +7,7 @@ import concurrent.futures
 import time
 import logging
 import threading
-import random
+from .edge import generate_audio_with_edge_tts, DEFAULT_VOICE
 
 # 设置日志 - 仅记录错误
 logging.basicConfig(
@@ -24,39 +24,52 @@ load_dotenv(override=True)
 json_locks = {}
 
 
-# 调用API来生成音频
-def generate_audio(text: str, max_retries=3):
-    url = os.getenv("AUDIO_API_URL")
-    api_key = os.getenv("AUDIO_API_KEY")
-    model = os.getenv("AUDIO_MODEL")
-    keys = api_key.split(",")
-    random_key = random.choice(keys)
+# 使用Edge TTS生成音频
+async def generate_audio_async(text: str, audio_path: str, original_text: str = None) -> bool:
+    """
+    Use Edge TTS to generate audio asynchronously.
+    
+    Args:
+        text: Text to convert to speech
+        audio_path: Path to save audio file
+        original_text: Original text with punctuation for subtitle restoration
+        
+    Returns:
+        bool: Success status
+    """
+    try:
+        # Get voice from environment or use default
+        voice = os.getenv("EDGE_TTS_VOICE", DEFAULT_VOICE)
+        
+        # Generate audio and subtitles
+        subtitle_path = os.path.splitext(audio_path)[0] + ".srt"
+        success, _ = await generate_audio_with_edge_tts(
+            text=text,
+            audio_path=audio_path,
+            voice=voice,
+            subtitle_path=subtitle_path,
+            original_text=original_text
+        )
+        
+        return success
+    except Exception as e:
+        logger.error(f"Edge TTS generation failed: {e}")
+        return False
 
-    payload = {
-        "model": model,
-        "input": text,
-        "voice": "FunAudioLLM/CosyVoice2-0.5B:benjamin",
-        "response_format": "mp3",
-        "sample_rate": 44100,
-    }
-    headers = {
-        "Authorization": f"Bearer {random_key}",
-        "Content-Type": "application/json",
-    }
 
-    for retry in range(max_retries):
-        try:
-            response = requests.post(url, json=payload, headers=headers)
-            if response.status_code == 200:
-                return response.content
-            else:
-                time.sleep(1)  # 休息一秒再重试
-        except Exception as e:
-            if retry == max_retries - 1:  # 只在最后一次重试失败时记录日志
-                logger.error(f"生成音频出错：{str(e)}")
-            time.sleep(1)
-
-    return None
+def generate_audio(text: str, audio_path: str, original_text: str = None) -> bool:
+    """
+    Synchronous wrapper for Edge TTS audio generation.
+    
+    Args:
+        text: Text to convert to speech  
+        audio_path: Path to save audio file
+        original_text: Original text with punctuation for subtitle restoration
+        
+    Returns:
+        bool: Success status
+    """
+    return asyncio.run(generate_audio_async(text, audio_path, original_text))
 
 
 # 更新JSON文件中的数据
@@ -89,6 +102,52 @@ def update_json_with_audio_path(chapter_file_path, item_id, audio_path):
 
 
 # 处理单个条目
+async def process_item_async(item, book_id, chapter_file_path, pbar, semaphore):
+    async with semaphore:
+        item_id = item["id"]
+        text = item["text"]
+
+        # 构建保存路径
+        chapter_name = os.path.basename(chapter_file_path).split(".")[0]
+        audio_dir = f"data/book/{book_id}/audio/{chapter_name}"
+        audio_path = f"{audio_dir}/{item_id}.mp3"
+
+        # 确保目录存在
+        os.makedirs(audio_dir, exist_ok=True)
+
+        # 检查文件是否已存在
+        if os.path.exists(audio_path):
+            # 检查JSON是否已更新过
+            if "audio_path" not in item:
+                # 文件存在但JSON未更新，更新JSON
+                relative_audio_path = f"audio/{chapter_name}/{item_id}.mp3"
+                update_json_with_audio_path(chapter_file_path, item_id, relative_audio_path)
+            pbar.update(1)  # 更新进度条
+            return True
+
+        # 使用Edge TTS生成音频
+        success = await generate_audio_async(text, audio_path, text)
+
+        # 检查是否生成成功
+        if not success:
+            logger.error(f"处理项目 {chapter_name}/{item_id} 失败，跳过")
+            pbar.update(1)  # 更新进度条
+            return False
+
+        try:
+            # 更新JSON文件，添加audio_path字段
+            relative_audio_path = f"/data/book/{book_id}/audio/{chapter_name}/{item_id}.mp3"
+            update_json_with_audio_path(chapter_file_path, item_id, relative_audio_path)
+        except Exception as e:
+            logger.error(f"保存音频文件失败：{str(e)}")
+            pbar.update(1)
+            return False
+
+        pbar.update(1)  # 更新进度条
+        return True
+
+
+# 处理单个条目 (同步版本)
 def process_item(item, book_id, chapter_file_path, pbar):
     item_id = item["id"]
     text = item["text"]
@@ -111,20 +170,16 @@ def process_item(item, book_id, chapter_file_path, pbar):
         pbar.update(1)  # 更新进度条
         return True
 
-    # 生成音频
-    audio_data = generate_audio(text)
+    # 使用Edge TTS生成音频
+    success = generate_audio(text, audio_path, text)
 
     # 检查是否生成成功
-    if audio_data is None:
+    if not success:
         logger.error(f"处理项目 {chapter_name}/{item_id} 失败，跳过")
         pbar.update(1)  # 更新进度条
         return False
 
-    # 保存音频文件
     try:
-        with open(audio_path, "wb") as f:
-            f.write(audio_data)
-
         # 更新JSON文件，添加audio_path字段
         relative_audio_path = f"/data/book/{book_id}/audio/{chapter_name}/{item_id}.mp3"
         update_json_with_audio_path(chapter_file_path, item_id, relative_audio_path)
@@ -137,7 +192,81 @@ def process_item(item, book_id, chapter_file_path, pbar):
     return True
 
 
+async def create_book_audio_async(book_id: str):
+    """Async version of create_book_audio using Edge TTS with concurrency."""
+    # 从环境变量获取线程数
+    try:
+        max_concurrent = int(os.getenv("AUDIO_THREADS", "5"))
+    except ValueError:
+        max_concurrent = 5  # 默认使用5个并发
+
+    # 获取 data/book/{book_id}/storyboard 目录下的所有json
+    storyboard_dir = f"data/book/{book_id}/storyboard"
+
+    if not os.path.exists(storyboard_dir):
+        logger.error(f"小说信息不存在{storyboard_dir}")
+        return
+
+    try:
+        chapter_files = os.listdir(storyboard_dir)
+        chapter_files.sort(key=lambda x: int(x.split(".")[0]))
+        chapter_file_paths = [os.path.join(storyboard_dir, f) for f in chapter_files]
+    except Exception as e:
+        logger.error(f"读取章节文件失败：{str(e)}")
+        return
+
+    # 计算总进度
+    total_items = 0
+    try:
+        for chapter_file_path in chapter_file_paths:
+            with open(chapter_file_path, "r", encoding="utf-8") as f:
+                chapter_data = json.load(f)
+                total_items += len(chapter_data)
+    except Exception as e:
+        logger.error(f"计算总进度失败：{str(e)}")
+        return
+
+    # 创建总进度条和信号量
+    semaphore = asyncio.Semaphore(max_concurrent)
+    
+    with tqdm(total=total_items, desc="总进度", unit="音频") as pbar:
+        # 收集所有任务
+        tasks = []
+        
+        # 遍历每个章节文件
+        for chapter_file_path in chapter_file_paths:
+            try:
+                # 读取章节数据
+                with open(chapter_file_path, "r", encoding="utf-8") as f:
+                    chapter_data = json.load(f)
+
+                # 为每个项目创建异步任务
+                for item in chapter_data:
+                    task = process_item_async(item, book_id, chapter_file_path, pbar, semaphore)
+                    tasks.append(task)
+                    
+            except Exception as e:
+                logger.error(f"处理章节 {chapter_file_path} 失败：{str(e)}")
+
+        # 并发执行所有任务
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+
 def create_book_audio(book_id: str):
+    """Main function to create book audio using Edge TTS."""
+    # Check if we should use async version
+    use_async = os.getenv("USE_ASYNC_AUDIO", "true").lower() == "true"
+    
+    if use_async:
+        # Use async version with concurrency
+        asyncio.run(create_book_audio_async(book_id))
+    else:
+        # Use original synchronous version with threading
+        create_book_audio_sync(book_id)
+
+
+def create_book_audio_sync(book_id: str):
     # 从环境变量获取线程数
     try:
         num_threads = int(os.getenv("AUDIO_THREADS", "1"))
