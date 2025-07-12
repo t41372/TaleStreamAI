@@ -5,6 +5,7 @@ from openai import OpenAI
 import re
 from tqdm import tqdm
 from dotenv import load_dotenv
+from .llm_client import get_storyboard_client
 
 
 
@@ -27,9 +28,9 @@ prompt = """
 角色：年轻男子，动作：喝酒、沉思，场景：星空下，情绪：孤独、怀念，镜头角度：中景，灯光与环境：星光、夜晚
 正确例子 
 年轻男子，喝酒、沉思，星空下，孤独、怀念，中景，星光、夜晚
-List a few popular cookie recipes in JSON format.
-Use this JSON schema:
-Recipe =[
+
+请严格按照以下JSON格式返回，不要添加任何其他文字或解释，只返回有效的JSON数组：
+[
     {
         "id": "1",
         "text": "xxxxxx",
@@ -43,53 +44,130 @@ Recipe =[
         "lensLanguage_en":""
     }
 ]
-Return: list[Recipe]
+
+重要：
+1. 必须返回完整的JSON数组
+2. 每个对象必须包含 id、text、lensLanguage_cn、lensLanguage_en 四个字段
+3. 不要在JSON前后添加任何解释文字
+4. 确保JSON格式完整且有效
 """
 
 
-def generate_board_json(chapter_content: str, max_retries=3, retry_delay=2):
-    client = OpenAI(
-        api_key=os.getenv("GEMINI_API_KEY"),
-        base_url=os.getenv("GEMINI_API_URL"),
-    )
+def generate_board_json(chapter_content: str, max_retries=3, retry_delay=2, use_stream=True):
+    try:
+        client = get_storyboard_client()
+    except Exception as e:
+        print(f"❌ 分鏡模型客戶端初始化失敗: {str(e)}")
+        return []
 
     for attempt in range(max_retries):
         try:
-            response = client.chat.completions.create(
-                model="gemini-2.0-flash",
-                messages=[
-                    {"role": "system", "content": prompt},
-                    {"role": "user", "content": chapter_content},
-                ],
-            )
-
-            content = response.choices[0].message.content
+            print(f"\n{'='*60}")
+            print(f"第 {attempt + 1} 次嘗試生成分鏡...")
+            print(f"{'='*60}")
+            
+            if use_stream:
+                # 使用流式請求
+                print("🚀 開始流式生成分鏡...")
+                response_stream = client.chat_completion_stream(
+                    messages=[
+                        {"role": "system", "content": prompt},
+                        {"role": "user", "content": chapter_content},
+                    ],
+                    temperature=0.5,
+                )
+                
+                # 收集流式響應
+                full_content = ""
+                print("\n📝 模型推理過程和輸出:")
+                print("-" * 40)
+                
+                for chunk in response_stream:
+                    if chunk.choices[0].delta.content is not None:
+                        chunk_content = chunk.choices[0].delta.content
+                        print(chunk_content, end='', flush=True)
+                        full_content += chunk_content
+                
+                print("\n" + "-" * 40)
+                print("✅ 流式響應完成\n")
+                content = full_content
+            else:
+                # 使用非流式請求
+                print("📤 發送非流式請求...")
+                response = client.chat_completion(
+                    messages=[
+                        {"role": "system", "content": prompt},
+                        {"role": "user", "content": chapter_content},
+                    ],
+                    temperature=0.5,
+                )
+                content = response.choices[0].message.content
+                print(f"📥 收到響應: {len(content)} 字符")
+            
+            # 清理響應內容
+            print("🔧 處理響應內容...")
             content = re.sub(r"```json\n?|\n?```", "", content)
+            content = content.strip()
+            
+            print(f"清理後內容長度: {len(content)} 字符")
+            print(f"內容預覽: {content[:200]}...")
 
             try:
+                print("🔍 嘗試解析JSON...")
                 result = json.loads(content)
                 # 验证结果非空
                 if result and isinstance(result, list) and len(result) > 0:
+                    print(f"✅ 分鏡生成成功！第{attempt+1}次嘗試")
+                    print(f"📊 生成了 {len(result)} 個分鏡項目")
+                    
+                    # 顯示生成的分鏡摘要
+                    for i, item in enumerate(result[:3]):  # 只顯示前3個
+                        print(f"   {i+1}. ID: {item.get('id')}, Text: {item.get('text', '')[:30]}...")
+                    if len(result) > 3:
+                        print(f"   ... 還有 {len(result) - 3} 個分鏡項目")
+                    
                     return result
                 else:
-                    print(f"API返回空结果，第{attempt+1}次尝试")
+                    print(f"⚠️ API返回空結果，第{attempt+1}次嘗試")
+                    print(f"原始內容: {content[:500]}...")
                     if attempt < max_retries - 1:
                         time.sleep(retry_delay)
                     continue
-            except json.JSONDecodeError:
-                print(f"JSON解析失败，第{attempt+1}次尝试")
-                print(f"原始内容: {content[:100]}...")
+            except json.JSONDecodeError as e:
+                print(f"❌ JSON解析失敗，第{attempt+1}次嘗試")
+                print(f"JSON錯誤: {str(e)}")
+                print(f"錯誤位置: 第 {e.lineno} 行，第 {e.colno} 列")
+                print(f"原始內容: {content[:1000]}...")
+                print("-" * 40)
+                
+                # 尝试修复常见的JSON问题
+                if attempt == max_retries - 1:  # 最后一次尝试时才进行修复
+                    print("🔧 嘗試修復JSON格式...")
+                    fixed_content = fix_json_format(content)
+                    if fixed_content:
+                        try:
+                            result = json.loads(fixed_content)
+                            if result and isinstance(result, list) and len(result) > 0:
+                                print("✅ JSON修復成功!")
+                                return result
+                        except json.JSONDecodeError:
+                            print("❌ JSON修復失敗")
+                
                 if attempt < max_retries - 1:
+                    print(f"⏳ 等待 {retry_delay} 秒後重試...")
                     time.sleep(retry_delay)
                 continue
 
         except Exception as e:
-            print(f"API请求错误: {str(e)}，第{attempt+1}次尝试")
+            print(f"❌ API請求錯誤: {str(e)}，第{attempt+1}次嘗試")
+            if "timeout" in str(e).lower():
+                print("⏰ 請求超時，可能是因為內容太長或服務器忙碌")
             if attempt < max_retries - 1:
+                print(f"⏳ 等待 {retry_delay} 秒後重試...")
                 time.sleep(retry_delay)
             continue
 
-    print("所有重试尝试都失败，返回空列表")
+    print("❌ 所有重試嘗試都失敗，返回空列表")
     return []
 
 
@@ -138,6 +216,12 @@ def merge_json_results(results_list):
 
 
 def generate_board(book_id: str):
+    # 首先测试API连接
+    print("开始处理前先测试API连接...")
+    if not test_api_connection():
+        print("❌ API连接失败，请检查环境变量设置")
+        return False
+    
     # 确保目标目录存在
     storyboard_dir = f"data/book/{book_id}/storyboard"
     if not os.path.exists(storyboard_dir):
@@ -180,43 +264,42 @@ def generate_board(book_id: str):
         ) as file:
             chapter_content = file.read()
 
-        # 首先尝试处理完整章节
-        board_json = generate_board_json(chapter_content)
+        # 檢查內容長度，如果太長則自動分塊處理
+        lines = chapter_content.splitlines()
+        line_count = len(lines)
+        content_size = len(chapter_content)
+        
+        print(f"章節 {chapter_file}: {line_count} 行, {content_size} 字符")
 
-        # 如果失败了，检查内容长度并可能进行分块处理
-        if not board_json:
-            lines = chapter_content.splitlines()
-            line_count = len(lines)
+        # 如果內容超過20行或5KB，進行分塊處理
+        if line_count > 20 or content_size > 5000:
+            print(f"章節 {chapter_file} 內容較長，進行分塊處理")
+            chunks = split_content_into_chunks(chapter_content, 20)  # 每塊20行
+            chunk_results = []
 
-            if line_count > 120:
-                print(f"章节 {chapter_file} 内容过长 ({line_count} 行)，进行分块处理")
-                chunks = split_content_into_chunks(chapter_content, 100)
-                chunk_results = []
+            print(f"將章節分為 {len(chunks)} 個塊進行處理")
+            for i, chunk in enumerate(chunks):
+                print(f"\n🔄 處理塊 {i+1}/{len(chunks)}")
+                print(f"塊內容長度: {len(chunk)} 字符")
+                chunk_json = generate_board_json(chunk, use_stream=True)
 
-                print(f"将章节分为 {len(chunks)} 个块进行处理")
-                for i, chunk in enumerate(chunks):
-                    print(f"处理块 {i+1}/{len(chunks)}")
-                    chunk_json = generate_board_json(chunk)
-
-                    if chunk_json:
-                        chunk_results.append(chunk_json)
-                    else:
-                        print(f"警告：无法为章节 {chapter_file} 的块 {i+1} 生成分镜")
-
-                if chunk_results:
-                    # 合并所有成功的块结果
-                    board_json = merge_json_results(chunk_results)
-                    print(
-                        f"成功合并 {len(chunk_results)} 个块的结果，共 {len(board_json)} 个分镜项"
-                    )
+                if chunk_json:
+                    chunk_results.append(chunk_json)
+                    print(f"✅ 塊 {i+1} 處理成功，生成 {len(chunk_json)} 個分鏡")
                 else:
-                    print(f"警告：章节 {chapter_file} 的所有块处理都失败了")
+                    print(f"❌ 警告：無法為章節 {chapter_file} 的塊 {i+1} 生成分鏡")
+
+            if chunk_results:
+                # 合并所有成功的块结果
+                board_json = merge_json_results(chunk_results)
+                print(f"成功合併 {len(chunk_results)} 個塊的結果，共 {len(board_json)} 個分鏡項")
             else:
-                print(
-                    f"章节 {chapter_file} 虽然处理失败，但内容不超过120行，尝试重新生成"
-                )
-                # 再次尝试处理完整内容
-                board_json = generate_board_json(chapter_content)
+                print(f"警告：章節 {chapter_file} 的所有塊處理都失败了")
+                board_json = []
+        else:
+            # 直接處理完整章節
+            print(f"📖 直接處理完整章節")
+            board_json = generate_board_json(chapter_content, use_stream=True)
 
         # 处理空结果
         if not board_json:
@@ -241,6 +324,59 @@ def generate_board(book_id: str):
             f"所有章节处理成功。处理了 {processed_count} 个章节，跳过了 {len(skipped_chapters)} 个章节"
         )
         return True
+
+
+def fix_json_format(content):
+    """
+    尝试修复常见的JSON格式问题
+    """
+    try:
+        # 移除markdown代码块标记
+        content = re.sub(r"```json\n?|\n?```", "", content)
+        
+        # 如果内容被截断，尝试添加缺失的结构
+        content = content.strip()
+        
+        # 确保以[开始
+        if not content.startswith('['):
+            content = '[' + content
+        
+        # 如果没有正确结束，尝试补全
+        if not content.endswith(']'):
+            # 寻找最后一个完整的对象
+            last_brace = content.rfind('}')
+            if last_brace != -1:
+                content = content[:last_brace + 1] + ']'
+            else:
+                content = content + ']'
+        
+        # 尝试修复常见的引号问题
+        content = re.sub(r'([{,]\s*)(\w+):', r'\1"\2":', content)  # 给键加引号
+        
+        return content
+    except Exception as e:
+        print(f"JSON修复过程中出错: {str(e)}")
+        return None
+
+
+def test_api_connection():
+    """
+    测试API连接是否正常
+    """
+    try:
+        client = get_storyboard_client()
+        print("正在测试分鏡生成API连接...")
+        
+        if client.test_connection():
+            print("✅ 分鏡生成API连接测试成功!")
+            return True
+        else:
+            print("❌ 分鏡生成API连接测试失败")
+            return False
+        
+    except Exception as e:
+        print(f"❌ 分鏡生成API连接测试失败: {str(e)}")
+        return False
 
 
 if __name__ == "__main__":

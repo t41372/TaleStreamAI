@@ -2,18 +2,36 @@ import os
 import sys
 from pathlib import Path
 from app.main import get_book_content, extract_free_chapters, get_chapter_content
-from app.board import generate_board
+from app.board import generate_board, test_api_connection
 from app.image import get_book_images, get_book_content as create_book_image
 from app.audio import create_book_audio
 from app.tts import create_tts
 from app.video import create_book_video
 from app.video_end import save_output_video
+from app.llm_client import test_all_connections
 
 
 def main():
     """Main function to process a novel (from URL or local file)."""
+    # 检查是否是测试API连接
+    if len(sys.argv) >= 2 and sys.argv[1] == "--test-api":
+        print("测试所有API连接...")
+        results = test_all_connections()
+        
+        print("\n=== API連接測試結果 ===")
+        for api_type, success in results.items():
+            status = "✅ 成功" if success else "❌ 失敗"
+            print(f"{api_type.capitalize()}: {status}")
+        
+        all_success = all(results.values())
+        if all_success:
+            print("\n🎉 所有API連接正常！")
+        else:
+            print("\n⚠️  部分API連接失敗，請檢查.env配置")
+        return
+    
     # 支持命令行参数指定本地文件
-    local_file = None
+    local_file = "test_novel.txt"
     book_id = "1043294775"  # 默认书籍ID
     
     if len(sys.argv) >= 2:
