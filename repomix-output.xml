@@ -1,0 +1,4146 @@
+This file is a merged representation of a subset of the codebase, containing files not matching ignore patterns, combined into a single document by Repomix.
+
+<file_summary>
+This section contains a summary of this file.
+
+<purpose>
+This file contains a packed representation of a subset of the repository's contents that is considered the most important context.
+It is designed to be easily consumable by AI systems for analysis, code review,
+or other automated processes.
+</purpose>
+
+<file_format>
+The content is organized as follows:
+1. This summary section
+2. Repository information
+3. Directory structure
+4. Repository files (if enabled)
+5. Multiple file entries, each consisting of:
+  - File path as an attribute
+  - Full contents of the file
+</file_format>
+
+<usage_guidelines>
+- This file should be treated as read-only. Any changes should be made to the
+  original repository files, not this packed version.
+- When processing this file, use the file path to distinguish
+  between different files in the repository.
+- Be aware that this file may contain sensitive information. Handle it with
+  the same level of security as you would the original repository.
+</usage_guidelines>
+
+<notes>
+- Some files may have been excluded based on .gitignore rules and Repomix's configuration
+- Binary files are not included in this packed representation. Please refer to the Repository Structure section for a complete list of file paths, including binary files
+- Files matching these patterns are excluded: src/olv_launcher, olv-launcher-ui, plugins, .cursor, repo_report, tests
+- Files matching patterns in .gitignore are excluded
+- Files matching default ignore patterns are excluded
+- Files are sorted by Git change count (files with more changes are at the bottom)
+</notes>
+
+</file_summary>
+
+<directory_structure>
+app/
+  audio.py
+  board.py
+  image.py
+  main.py
+  prompt.py
+  tool.py
+  tts.py
+  video_end.py
+  video.py
+models/
+  realesr-animevideov3-x2.param
+  realesr-animevideov3-x3.param
+  realesr-animevideov3-x4.param
+.env.example
+.gitignore
+.python-version
+edge.py
+LICENSE
+main.py
+prompt.txt
+pyproject.toml
+README.md
+test_grouped.srt
+test.srt
+word_srt_to_sentence.py
+新目标.md
+</directory_structure>
+
+<files>
+This section contains the contents of the repository's files.
+
+<file path="edge.py">
+#!/usr/bin/env python3
+
+"""Example showing how to use use .stream() method to get audio chunks
+and feed them to SubMaker to generate subtitles"""
+
+import asyncio
+
+import edge_tts
+
+TEXT = "这一日，天朗气清，惠风和畅。但是，天有不测风云，忽然狂风大作，乌云密布，雷声大作。"
+VOICE = "zh-CN-YunxiNeural"
+OUTPUT_FILE = "test.mp3"
+SRT_FILE = "test.srt"
+
+
+async def amain() -> None:
+    """Main function"""
+    communicate = edge_tts.Communicate(TEXT, VOICE)
+    submaker = edge_tts.SubMaker()
+    with open(OUTPUT_FILE, "wb") as file:
+        async for chunk in communicate.stream():
+            if chunk["type"] == "audio":
+                file.write(chunk["data"])
+            elif chunk["type"] == "WordBoundary":
+                submaker.feed(chunk)
+
+    with open(SRT_FILE, "w", encoding="utf-8") as file:
+        file.write(submaker.get_srt())
+
+
+if __name__ == "__main__":
+    asyncio.run(amain())
+</file>
+
+<file path="test_grouped.srt">
+1
+00:00:00,100 --> 00:00:03,075
+这一日天朗气清惠风和畅
+
+2
+00:00:03,650 --> 00:00:09,612
+但是天有不测风云忽然狂风大作乌云密布雷声大作
+</file>
+
+<file path="test.srt">
+1
+00:00:00,100 --> 00:00:00,275
+这
+
+2
+00:00:00,275 --> 00:00:00,737
+一日
+
+3
+00:00:00,937 --> 00:00:01,925
+天朗气清
+
+4
+00:00:02,162 --> 00:00:03,075
+惠风和畅
+
+5
+00:00:03,650 --> 00:00:04,212
+但是
+
+6
+00:00:04,562 --> 00:00:05,825
+天有不测风云
+
+7
+00:00:06,025 --> 00:00:06,387
+忽然
+
+8
+00:00:06,412 --> 00:00:07,300
+狂风大作
+
+9
+00:00:07,550 --> 00:00:08,412
+乌云密布
+
+10
+00:00:08,650 --> 00:00:09,612
+雷声大作
+</file>
+
+<file path="word_srt_to_sentence.py">
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+
+"""
+一个用于将逐字SRT字幕合并为句子/短语字幕的CLI工具。
+A command-line tool to group word-by-word SRT subtitles into sentence-like lines.
+"""
+
+import sys
+from dataclasses import dataclass
+from datetime import timedelta
+from pathlib import Path
+from typing import List, Iterator, Optional
+
+# 第三方库导入 (Third-party imports)
+try:
+    import srt
+    import typer
+except ImportError:
+    # 这是一个友好的提示，告诉用户如果缺少依赖该如何安装。
+    # 对于一个要分发的工具来说，这种细节很重要。
+    print("错误: 缺少必要的库。请运行 'pip install \"typer[all]\" srt'", file=sys.stderr)
+    sys.exit(1)
+
+
+# ==============================================================================
+# 核心逻辑 (Core Logic) - 这部分与之前基本相同
+# 我们把它封装得很好，可以被其他任何 Python 脚本导入和使用。
+# ==============================================================================
+
+@dataclass
+class SubtitleWord:
+    """Represents a single word with its timing and content."""
+    start: timedelta
+    end: timedelta
+    content: str
+
+
+def group_word_by_word_srt(
+    words: Iterator[srt.Subtitle],
+    max_line_length: int = 30,
+    max_pause_seconds: float = 0.5,
+) -> List[srt.Subtitle]:
+    """
+    Groups word-by-word subtitles into sentence-like lines.
+
+    Args:
+        words: An iterator of srt.Subtitle objects from a word-by-word SRT.
+        max_line_length: The maximum number of characters for a single subtitle line.
+        max_pause_seconds: The maximum pause between words to be considered in the same group.
+
+    Returns:
+        A list of new srt.Subtitle objects, representing the grouped lines.
+    """
+    final_subtitles: List[srt.Subtitle] = []
+    current_group: List[SubtitleWord] = []
+    max_pause_delta = timedelta(seconds=max_pause_seconds)
+
+    def finalize_group(group: List[SubtitleWord]) -> srt.Subtitle:
+        start_time = group[0].start
+        end_time = group[-1].end
+        content = "".join(w.content for w in group)
+        return srt.Subtitle(index=0, start=start_time, end=end_time, content=content)
+
+    for word_sub in words:
+        current_word = SubtitleWord(
+            start=word_sub.start,
+            end=word_sub.end,
+            content=word_sub.content.strip()
+        )
+
+        if not current_word.content:
+            continue # 跳过空的字幕条目
+
+        if not current_group:
+            current_group.append(current_word)
+            continue
+
+        last_word_in_group = current_group[-1]
+
+        pause_duration = current_word.start - last_word_in_group.end
+        is_pause_too_long = pause_duration > max_pause_delta
+
+        current_length = sum(len(w.content) for w in current_group)
+        projected_length = current_length + len(current_word.content)
+        is_length_exceeded = projected_length > max_line_length
+
+        if is_pause_too_long or is_length_exceeded:
+            final_subtitles.append(finalize_group(current_group))
+            current_group = [current_word]
+        else:
+            current_group.append(current_word)
+
+    if current_group:
+        final_subtitles.append(finalize_group(current_group))
+        
+    for i, sub in enumerate(final_subtitles, 1):
+        sub.index = i
+        
+    return final_subtitles
+
+
+# ==============================================================================
+# 命令行界面 (Command-Line Interface) - 这是我们新增的部分
+# 使用 Typer 来构建。
+# ==============================================================================
+
+# 创建一个 Typer 应用实例
+app = typer.Typer(
+    name="srt-grouper",
+    help="一个将逐字SRT字幕合并为可读长句的CLI工具。",
+    add_completion=False, # 通常在简单脚本中可以禁用shell补全，让启动更快
+)
+
+@app.command()
+def main(
+    input_file: Path = typer.Argument(
+        ...,  # '...' 表示这是一个必需参数
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        readable=True,
+        help="输入的逐字 SRT 文件路径。",
+    ),
+    output_file: Optional[Path] = typer.Option(
+        None, # 默认值是 None，表示这是一个可选参数
+        "--output", "-o",
+        help="输出的文件路径。如果未提供，则在输入文件名后添加 '_grouped'。",
+    ),
+    max_length: int = typer.Option(
+        30, "--max-length", "-l",
+        min=1, # Typer 甚至可以帮你做这种范围检查！
+        help="每行字幕的最大字符数。",
+    ),
+    max_pause: float = typer.Option(
+        0.4, "--max-pause", "-p",
+        min=0.0,
+        help="被视为同一句话的最大单词间停顿时长（秒）。",
+    ),
+):
+    """
+    读取一个逐字的 SRT 文件，将其合并成句子，并输出到新文件。
+    """
+    typer.echo(f"🚀 开始处理文件: {input_file}")
+
+    # 决定输出文件名
+    if output_file is None:
+        # pathlib 的强大之处：可以轻松地操作路径
+        output_file = input_file.with_stem(f"{input_file.stem}_grouped")
+
+    # 确保我们不会意外覆盖输入文件
+    if input_file.resolve() == output_file.resolve():
+        typer.secho("错误: 输出文件不能与输入文件相同。", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+
+    try:
+        # 读取和解析
+        typer.echo("🔍 正在解析字幕...")
+        with open(input_file, 'r', encoding='utf-8') as f:
+            word_subs_iterator = srt.parse(f.read())
+
+        # 调用核心逻辑
+        typer.echo(f"🧠 正在以最大长度 {max_length} 和最大停顿 {max_pause}s 进行分组...")
+        grouped_subs = group_word_by_word_srt(
+            words=word_subs_iterator,
+            max_line_length=max_length,
+            max_pause_seconds=max_pause,
+        )
+
+        # 生成和写入
+        final_srt_string = srt.compose(grouped_subs)
+        output_file.write_text(final_srt_string, encoding='utf-8')
+
+        # 使用 typer.secho 来输出带颜色的成功信息
+        typer.secho(
+            f"\n🎉 处理完成！成功生成 {len(grouped_subs)} 条字幕。",
+            fg=typer.colors.GREEN, bold=True
+        )
+        typer.echo(f"💾 结果已保存至: {output_file}")
+
+    except Exception as e:
+        # 统一的错误处理
+        typer.secho(f"处理过程中发生严重错误: {e}", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+
+
+# ==============================================================================
+# 脚本入口 (Script Entrypoint)
+# =================================================_============================
+if __name__ == "__main__":
+    # 当脚本被直接运行时，Typer 会接管 sys.argv 并执行上面定义的命令
+    app()
+</file>
+
+<file path="新目标.md">
+核心新目标:
+
+把 tts 从 CosyVoice 替换成 edge.py 中实现的 edge tts。
+不再使用 whisper 模型生成字幕。edge-tts 自己就能生成字幕，或是我们用原始文本尝试生成字幕。
+这两种方法... 都有一些问题需要解决。
+用 edge.py 里面的方式拿 tts 的音频的问题是他是真的逐字的字幕 (参考 test.srt)，另外标点符号会消失 (参考 test_grouped.txt)。或许我们可以用 edge-tts 的没有标点符号的小说文本，去从原始文本中找到高度类似只是多了标点符号的文本，然后把原始文本当作字幕，这样就有标点符号了。
+
+
+另外或许 tts 可以用 asyncio 和 semaphore 做一定程度上的并发。
+
+图像生成不要用 SD (stable diffusion) 了，用 flux 的 API。具体调用文档在此
+
+~~~markdown
+# Generate Image API 🖼️
+
+### 1. Text-To-Image (GET) 🖌️
+
+`GET https://image.pollinations.ai/prompt/{prompt}`
+
+Generates an image based on a text description.
+
+**Parameters:**
+
+| Parameter  | Required | Description                                                                        | Default |
+| :--------- | :------- | :--------------------------------------------------------------------------------- | :------ |
+| `prompt`   | Yes      | Text description of the image. Should be URL-encoded.                              |         |
+| `model`    | No       | Model for generation. See [Available Image Models](#list-available-image-models-). | `flux`  |
+| `seed`     | No       | Seed for reproducible results.                                                     |         |
+| `width`    | No       | Width of the generated image in pixels.                                            | 1024    |
+| `height`   | No       | Height of the generated image in pixels.                                           | 1024    |
+| `image`    | No       | URL of input image for image-to-image generation/editing (kontext & gptimage).    |         |
+| `nologo`   | No       | Set to `true` to disable the Pollinations logo overlay (for registered users).     | `false` |
+| `private`  | No       | Set to `true` to prevent the image from appearing in the public feed.              | `false` |
+| `enhance`  | No       | Set to `true` to enhance the prompt using an LLM for more detail.                  | `false` |
+| `safe`     | No       | Set to `true` for strict NSFW filtering (throws error if detected).                | `false` |
+| `transparent` | No    | Set to `true` to generate images with transparent backgrounds (gptimage model only). | `false` |
+| `referrer` | No\*     | Referrer URL/Identifier. See [Referrer Section](#referrer).                        |         |
+
+**Return:** Image file (typically JPEG) 🖼️
+
+**Rate Limit (per IP):** 1 concurrent request / 5 sec interval (anonymous tier). See [Tiers](#tiers--rate-limits) for higher limits.
+
+<details>
+<summary><strong>Code Examples:</strong> Generate Image (GET)</summary>
+
+**cURL:**
+
+```bash
+# Basic prompt, save to file
+curl -o sunset.jpg "https://image.pollinations.ai/prompt/A%20beautiful%20sunset%20over%20the%20ocean"
+
+# With parameters
+curl -o sunset_large.jpg "https://image.pollinations.ai/prompt/A%20beautiful%20sunset%20over%20the%20ocean?width=1280&height=720&seed=42&model=flux"
+
+# With transparent background (gptimage model only)
+curl -o logo_transparent.png "https://image.pollinations.ai/prompt/A%20company%20logo%20on%20transparent%20background?model=gptimage&transparent=true"
+
+# Image-to-image generation with kontext model
+curl -o logo_cake.png "https://image.pollinations.ai/prompt/bake_a_cake_from_this_logo?model=kontext&image=https://avatars.githubusercontent.com/u/86964862"
+```
+
+**Python (`requests`):**
+
+```python^
+import requests
+import urllib.parse
+
+prompt = "A beautiful sunset over the ocean"
+params = {
+    "width": 1280,
+    "height": 720,
+    "seed": 42,
+    "model": "flux",
+    # "nologo": "true", # Optional, set to "true" for registered referrers/tokens
+    # "transparent": "true", # Optional - generates transparent background (gptimage model only)
+    # "image": "https://example.com/input-image.jpg", # Optional - for image-to-image generation (kontext & gptimage)
+    # "referrer": "MyPythonApp" # Optional for referrer-based authentication
+}
+encoded_prompt = urllib.parse.quote(prompt)
+url = f"https://image.pollinations.ai/prompt/{encoded_prompt}"
+
+try:
+    response = requests.get(url, params=params, timeout=300) # Increased timeout for image generation
+    response.raise_for_status() # Raise an exception for bad status codes
+
+    with open('generated_image.jpg', 'wb') as f:
+        f.write(response.content)
+    print("Image saved as generated_image.jpg")
+
+except requests.exceptions.RequestException as e:
+    print(f"Error fetching image: {e}")
+    # Consider checking response.text for error messages from the API
+    # if response is not None: print(response.text)
+```
+
+</details>
+~~~
+
+另外，遵守 python >=3.12 的最佳实践，让这个软件更加易用。
+另外，pyproject.toml 有些包在重构之后应该就不需要了。
+</file>
+
+<file path="app/audio.py">
+import requests
+from dotenv import load_dotenv
+import os
+import json
+from tqdm import tqdm
+import concurrent.futures
+import time
+import logging
+import threading
+import random
+
+# 设置日志 - 仅记录错误
+logging.basicConfig(
+    level=logging.ERROR,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    handlers=[logging.StreamHandler()],
+)
+logger = logging.getLogger(__name__)
+
+# 加载环境变量
+load_dotenv(override=True)
+
+# 线程锁字典，用于防止同时写入同一个JSON文件
+json_locks = {}
+
+
+# 调用API来生成音频
+def generate_audio(text: str, max_retries=3):
+    url = os.getenv("AUDIO_API_URL")
+    api_key = os.getenv("AUDIO_API_KEY")
+    model = os.getenv("AUDIO_MODEL")
+    keys = api_key.split(",")
+    random_key = random.choice(keys)
+
+    payload = {
+        "model": model,
+        "input": text,
+        "voice": "FunAudioLLM/CosyVoice2-0.5B:benjamin",
+        "response_format": "mp3",
+        "sample_rate": 44100,
+    }
+    headers = {
+        "Authorization": f"Bearer {random_key}",
+        "Content-Type": "application/json",
+    }
+
+    for retry in range(max_retries):
+        try:
+            response = requests.post(url, json=payload, headers=headers)
+            if response.status_code == 200:
+                return response.content
+            else:
+                time.sleep(1)  # 休息一秒再重试
+        except Exception as e:
+            if retry == max_retries - 1:  # 只在最后一次重试失败时记录日志
+                logger.error(f"生成音频出错：{str(e)}")
+            time.sleep(1)
+
+    return None
+
+
+# 更新JSON文件中的数据
+def update_json_with_audio_path(chapter_file_path, item_id, audio_path):
+    # 获取或创建该文件的锁
+    if chapter_file_path not in json_locks:
+        json_locks[chapter_file_path] = threading.Lock()
+
+    # 使用锁确保线程安全
+    with json_locks[chapter_file_path]:
+        try:
+            # 读取JSON文件
+            with open(chapter_file_path, "r", encoding="utf-8") as f:
+                chapter_data = json.load(f)
+
+            # 查找对应的项并更新
+            for item in chapter_data:
+                if item["id"] == item_id:
+                    item["audio_path"] = audio_path
+                    break
+
+            # 写回JSON文件
+            with open(chapter_file_path, "w", encoding="utf-8") as f:
+                json.dump(chapter_data, f, ensure_ascii=False, indent=4)
+
+            return True
+        except Exception as e:
+            logger.error(f"更新JSON文件失败：{str(e)}")
+            return False
+
+
+# 处理单个条目
+def process_item(item, book_id, chapter_file_path, pbar):
+    item_id = item["id"]
+    text = item["text"]
+
+    # 构建保存路径
+    chapter_name = os.path.basename(chapter_file_path).split(".")[0]
+    audio_dir = f"data/book/{book_id}/audio/{chapter_name}"
+    audio_path = f"{audio_dir}/{item_id}.mp3"
+
+    # 确保目录存在
+    os.makedirs(audio_dir, exist_ok=True)
+
+    # 检查文件是否已存在
+    if os.path.exists(audio_path):
+        # 检查JSON是否已更新过
+        if "audio_path" not in item:
+            # 文件存在但JSON未更新，更新JSON
+            relative_audio_path = f"audio/{chapter_name}/{item_id}.mp3"
+            update_json_with_audio_path(chapter_file_path, item_id, relative_audio_path)
+        pbar.update(1)  # 更新进度条
+        return True
+
+    # 生成音频
+    audio_data = generate_audio(text)
+
+    # 检查是否生成成功
+    if audio_data is None:
+        logger.error(f"处理项目 {chapter_name}/{item_id} 失败，跳过")
+        pbar.update(1)  # 更新进度条
+        return False
+
+    # 保存音频文件
+    try:
+        with open(audio_path, "wb") as f:
+            f.write(audio_data)
+
+        # 更新JSON文件，添加audio_path字段
+        relative_audio_path = f"/data/book/{book_id}/audio/{chapter_name}/{item_id}.mp3"
+        update_json_with_audio_path(chapter_file_path, item_id, relative_audio_path)
+    except Exception as e:
+        logger.error(f"保存音频文件失败：{str(e)}")
+        pbar.update(1)
+        return False
+
+    pbar.update(1)  # 更新进度条
+    return True
+
+
+def create_book_audio(book_id: str):
+    # 从环境变量获取线程数
+    try:
+        num_threads = int(os.getenv("AUDIO_THREADS", "1"))
+    except ValueError:
+        num_threads = 1  # 默认使用1个线程
+
+    # 获取 data/book/{book_id}/storyboard 目录下的所有json
+    storyboard_dir = f"data/book/{book_id}/storyboard"
+
+    if not os.path.exists(storyboard_dir):
+        logger.error(f"小说信息不存在{storyboard_dir}")
+        return
+
+    try:
+        chapter_files = os.listdir(storyboard_dir)
+        chapter_files.sort(key=lambda x: int(x.split(".")[0]))
+        chapter_file_paths = [os.path.join(storyboard_dir, f) for f in chapter_files]
+    except Exception as e:
+        logger.error(f"读取章节文件失败：{str(e)}")
+        return
+
+    # 计算总进度
+    total_items = 0
+    try:
+        for chapter_file_path in chapter_file_paths:
+            with open(chapter_file_path, "r", encoding="utf-8") as f:
+                chapter_data = json.load(f)
+                total_items += len(chapter_data)
+    except Exception as e:
+        logger.error(f"计算总进度失败：{str(e)}")
+        return
+
+    # 创建总进度条
+    with tqdm(total=total_items, desc="总进度", unit="图") as pbar:
+        # 使用线程池
+        with concurrent.futures.ThreadPoolExecutor(max_workers=num_threads) as executor:
+            # 遍历每个章节文件
+            for chapter_file_path in chapter_file_paths:
+                try:
+                    # 读取章节数据
+                    with open(chapter_file_path, "r", encoding="utf-8") as f:
+                        chapter_data = json.load(f)
+
+                    # 提交任务到线程池
+                    futures = []
+                    for item in chapter_data:
+                        future = executor.submit(
+                            process_item, item, book_id, chapter_file_path, pbar
+                        )
+                        futures.append(future)
+
+                    # 等待所有任务完成
+                    concurrent.futures.wait(futures)
+                except Exception as e:
+                    logger.error(f"处理章节 {chapter_file_path} 失败：{str(e)}")
+
+
+if __name__ == "__main__":
+    create_book_audio("1043294775")
+</file>
+
+<file path="app/board.py">
+import os
+import json
+import time
+from openai import OpenAI
+import re
+from tqdm import tqdm
+from dotenv import load_dotenv
+
+
+
+load_dotenv(override=True)
+
+
+prompt = """
+你是一个资深的剧本编辑
+请根据我输入的内容生成分镜，分镜要包含所有小说内容，并且严格按照我输入的格式给我，其中 text为分镜文字内容，screenKeywords_cn 为分镜内容的镜头语言中文描述 screenKeywords_en为 镜头语言的英文描述，一个好的镜头语言可能包含这几类
+角色，动作，场景，情绪，风格，镜头角度，灯光与环境
+角色   年轻男子、老年女性、英雄、反派   描述角色的年龄、外观或角色类型。
+动作   跑步、微笑、哭泣、惊讶地看   明确角色的动作或表情。
+场景   森林、城市街道、海滩、厨房   指定故事发生的地点或背景。
+情绪   快乐、悲伤、神秘、浪漫   设定场景的氛围或情绪基调。
+风格   素描、水彩、卡通、写实、动漫   选择图像的艺术风格。
+镜头角度   特写、中景、广角、俯视   指定摄像机的视角或构图。
+灯光与环境   阳光、雨天、黄昏、夜景、背光  描述光线条件或环境氛围。
+不要对分镜文案进行提炼，一些角色人名，可以根据名字推测是男女还是青年少年，提示词中不要用人名
+错误例子 
+角色：年轻男子，动作：喝酒、沉思，场景：星空下，情绪：孤独、怀念，镜头角度：中景，灯光与环境：星光、夜晚
+正确例子 
+年轻男子，喝酒、沉思，星空下，孤独、怀念，中景，星光、夜晚
+List a few popular cookie recipes in JSON format.
+Use this JSON schema:
+Recipe =[
+    {
+        "id": "1",
+        "text": "xxxxxx",
+        "lensLanguage_cn": "",
+        "lensLanguage_en": ""
+    },
+    {
+        "id":"2",
+        "text":"xxxxxxxx",
+        "lensLanguage_cn":"",
+        "lensLanguage_en":""
+    }
+]
+Return: list[Recipe]
+"""
+
+
+def generate_board_json(chapter_content: str, max_retries=3, retry_delay=2):
+    client = OpenAI(
+        api_key=os.getenv("GEMINI_API_KEY"),
+        base_url=os.getenv("GEMINI_API_URL"),
+    )
+
+    for attempt in range(max_retries):
+        try:
+            response = client.chat.completions.create(
+                model="gemini-2.0-flash",
+                messages=[
+                    {"role": "system", "content": prompt},
+                    {"role": "user", "content": chapter_content},
+                ],
+            )
+
+            content = response.choices[0].message.content
+            content = re.sub(r"```json\n?|\n?```", "", content)
+
+            try:
+                result = json.loads(content)
+                # 验证结果非空
+                if result and isinstance(result, list) and len(result) > 0:
+                    return result
+                else:
+                    print(f"API返回空结果，第{attempt+1}次尝试")
+                    if attempt < max_retries - 1:
+                        time.sleep(retry_delay)
+                    continue
+            except json.JSONDecodeError:
+                print(f"JSON解析失败，第{attempt+1}次尝试")
+                print(f"原始内容: {content[:100]}...")
+                if attempt < max_retries - 1:
+                    time.sleep(retry_delay)
+                continue
+
+        except Exception as e:
+            print(f"API请求错误: {str(e)}，第{attempt+1}次尝试")
+            if attempt < max_retries - 1:
+                time.sleep(retry_delay)
+            continue
+
+    print("所有重试尝试都失败，返回空列表")
+    return []
+
+
+def split_content_into_chunks(content, chunk_size=100):
+    """
+    将内容按行分割成多个块
+
+    Args:
+        content (str): 要分割的内容
+        chunk_size (int): 每个块的最大行数
+
+    Returns:
+        list: 分割后的内容块列表
+    """
+    lines = content.splitlines()
+    chunks = []
+
+    for i in range(0, len(lines), chunk_size):
+        chunk = "\n".join(lines[i : i + chunk_size])
+        chunks.append(chunk)
+
+    return chunks
+
+
+def merge_json_results(results_list):
+    """
+    合并多个JSON结果列表为一个列表
+
+    Args:
+        results_list (list): 包含多个JSON结果列表的列表
+
+    Returns:
+        list: 合并后的JSON结果列表
+    """
+    merged_results = []
+    id_counter = 1
+
+    for results in results_list:
+        for item in results:
+            # 更新ID以确保连续性
+            item["id"] = str(id_counter)
+            merged_results.append(item)
+            id_counter += 1
+
+    return merged_results
+
+
+def generate_board(book_id: str):
+    # 确保目标目录存在
+    storyboard_dir = f"data/book/{book_id}/storyboard"
+    if not os.path.exists(storyboard_dir):
+        os.makedirs(storyboard_dir)
+
+    # 获取所有章节文件
+    chapter_files = os.listdir(f"data/book/{book_id}/list")
+    # 按文件名排序
+    chapter_files.sort(key=lambda x: int(x.split(".")[0]))
+
+    # 跟踪处理结果
+    failed_chapters = []
+    skipped_chapters = []
+
+    for chapter_file in tqdm(chapter_files):
+        # 获取章节索引
+        index = chapter_file.split(".")[0]
+        # 检查目标文件是否已存在且有内容
+        target_file = f"{storyboard_dir}/{index}.json"
+
+        # 文件存在性检查
+        if os.path.exists(target_file):
+            try:
+                with open(target_file, "r", encoding="utf-8") as f:
+                    existing_content = json.load(f)
+                # 验证内容有效（非空列表或字典）
+                if existing_content and (
+                    isinstance(existing_content, list) and len(existing_content) > 0
+                ):
+                    print(f"跳过章节 {chapter_file} - 文件已存在且内容有效")
+                    skipped_chapters.append(chapter_file)
+                    continue  # 跳过处理
+            except (json.JSONDecodeError, IOError):
+                # 如果文件存在但内容无效或不可读，则重新处理
+                print(f"文件 {target_file} 存在但包含无效数据 - 重新处理")
+
+        # 读取章节内容
+        with open(
+            f"data/book/{book_id}/list/{chapter_file}", "r", encoding="utf-8"
+        ) as file:
+            chapter_content = file.read()
+
+        # 首先尝试处理完整章节
+        board_json = generate_board_json(chapter_content)
+
+        # 如果失败了，检查内容长度并可能进行分块处理
+        if not board_json:
+            lines = chapter_content.splitlines()
+            line_count = len(lines)
+
+            if line_count > 120:
+                print(f"章节 {chapter_file} 内容过长 ({line_count} 行)，进行分块处理")
+                chunks = split_content_into_chunks(chapter_content, 100)
+                chunk_results = []
+
+                print(f"将章节分为 {len(chunks)} 个块进行处理")
+                for i, chunk in enumerate(chunks):
+                    print(f"处理块 {i+1}/{len(chunks)}")
+                    chunk_json = generate_board_json(chunk)
+
+                    if chunk_json:
+                        chunk_results.append(chunk_json)
+                    else:
+                        print(f"警告：无法为章节 {chapter_file} 的块 {i+1} 生成分镜")
+
+                if chunk_results:
+                    # 合并所有成功的块结果
+                    board_json = merge_json_results(chunk_results)
+                    print(
+                        f"成功合并 {len(chunk_results)} 个块的结果，共 {len(board_json)} 个分镜项"
+                    )
+                else:
+                    print(f"警告：章节 {chapter_file} 的所有块处理都失败了")
+            else:
+                print(
+                    f"章节 {chapter_file} 虽然处理失败，但内容不超过120行，尝试重新生成"
+                )
+                # 再次尝试处理完整内容
+                board_json = generate_board_json(chapter_content)
+
+        # 处理空结果
+        if not board_json:
+            failed_chapters.append(chapter_file)
+            print(f"警告：无法为章节 {chapter_file} 生成分镜")
+            continue
+
+        # 将JSON写入文件
+        with open(target_file, "w", encoding="utf-8") as f:
+            json.dump(board_json, f, ensure_ascii=False, indent=2)
+
+    # 报告处理结果
+    if skipped_chapters:
+        print(f"跳过了 {len(skipped_chapters)} 个章节（文件已存在且内容有效）")
+
+    if failed_chapters:
+        print(f"处理完成，但以下章节失败: {', '.join(failed_chapters)}")
+        return False
+    else:
+        processed_count = len(chapter_files) - len(skipped_chapters)
+        print(
+            f"所有章节处理成功。处理了 {processed_count} 个章节，跳过了 {len(skipped_chapters)} 个章节"
+        )
+        return True
+
+
+if __name__ == "__main__":
+    success = generate_board("1043294775")
+    if not success:
+        print("部分章节处理失败。请检查并重试。")
+</file>
+
+<file path="app/image.py">
+import requests
+import json
+import os
+import base64
+import time
+from io import BytesIO
+from PIL import Image  # 需要安装 Pillow 库: pip install Pillow
+from dotenv import load_dotenv
+from tqdm import tqdm  # 用于显示进度条
+import gc
+import subprocess
+import glob
+
+
+# 加载环境变量
+load_dotenv(override=True)
+
+# 用AI生成画面
+def create_Image(prompt: str) -> str:
+    url = os.getenv("SD_API_URL")
+
+    payload = json.dumps(
+        {
+            "prompt": f"{prompt}{os.getenv('SD_LORA')}",
+            "sampler_name": "Euler",
+            "scheduler": "Exponential",
+            "sampler_index": "Euler",
+            "restore_faces": True,
+            "cfg_scale": 7,
+            "steps": os.getenv("SD_STEPS"),
+            "width": 512,
+            "height": 640,
+            "batch_size": 1,
+            "n_iter": 1,
+        }
+    )
+    headers = {"Content-Type": "application/json"}
+    response = requests.request("POST", url, headers=headers, data=payload)
+    response_data = response.json()
+
+    # 检查是否有错误返回
+    if "detail" in response_data:
+        error_msg = (
+            response_data["detail"][0]["msg"] if response_data["detail"] else "未知错误"
+        )
+        raise Exception(f"生成图片失败: {error_msg}")
+
+    # 检查是否有正确的返回格式
+    if "images" in response_data and len(response_data["images"]) > 0:
+        image_data = response_data["images"][0]
+        del response_data
+        gc.collect()
+        return image_data
+    else:
+        raise Exception("生成图片失败: 返回数据格式不正确")
+
+
+# 调用高清修复
+def upscale_image(image_path: str):
+    try:
+        path = os.path.join(os.getcwd(), image_path)
+        # 构建命令
+        command = [
+            os.path.join(os.getcwd(), "models", "upscayl-bin.exe"),
+            "-i",
+            path,
+            "-o",
+            path,
+            "-s",
+            os.getenv("UPSCAYL_SCALE"),
+            "-m",
+            os.path.join(os.getcwd(), "models"),
+            "-n",
+            os.getenv("UPSCAYL_MODEL"),
+            "-f",
+            os.getenv("UPSCALY_FILE_TYPE"),
+        ]
+        subprocess.run(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return True
+    except Exception as e:
+        return False
+
+# 删除log文件
+def delete_log_file():
+    # 新增功能：删除当前目录下的所有.log文件
+    log_files = glob.glob("*.log")
+    for log_file in log_files:
+        try:
+            os.remove(log_file)
+        except Exception as e:
+            print(f"删除日志文件失败 {log_file}: {e}")
+    time.sleep(0.1)
+
+# 保存base64图片到文件（保存为JPG格式）
+def save_base64_image(base64_data: str, save_path: str):
+    # 确保目录存在
+    os.makedirs(os.path.dirname(save_path), exist_ok=True)
+
+    # 将base64数据解码为图片并保存为JPG
+    try:
+        # 使用上下文管理器处理BytesIO
+        with BytesIO(base64.b64decode(base64_data)) as image_buffer:
+            # 使用上下文管理器处理图像
+            with Image.open(image_buffer) as image:
+                # 保存为JPG
+                image = image.convert("RGB")
+                image.save(save_path, "JPEG", quality=95)
+
+        # 手动触发垃圾回收
+        gc.collect()
+        return True
+    except Exception as e:
+        return str(e)
+
+# 保存错误信息到文件
+def save_error_message(error_msg: str, save_path: str):
+    # 确保目录存在
+    os.makedirs(os.path.dirname(save_path), exist_ok=True)
+
+    # 保存错误信息
+    with open(save_path, "w", encoding="utf-8") as error_file:
+        error_file.write(error_msg)
+
+# 根据ID获取小说文件和提示词列表
+def get_book_content(book_id: str):
+    # 读取目录下的所有json文件
+    storyboard_dir = f"data/book/{book_id}/storyboard"
+
+    if not os.path.exists(storyboard_dir):
+        raise Exception(f"目录不存在: {storyboard_dir}")
+
+    # 按照文件名排序
+    chapter_files = os.listdir(storyboard_dir)
+    chapter_files.sort(key=lambda x: int(x.split(".")[0]))
+    chapter_file_paths = [os.path.join(storyboard_dir, f) for f in chapter_files]
+
+    # 计算总进度
+    total_items = 0
+    for chapter_file_path in chapter_file_paths:
+        with open(chapter_file_path, "r", encoding="utf-8") as f:
+            chapter_data = json.load(f)
+            total_items += len(chapter_data)
+
+    # 创建总进度条
+    with tqdm(total=total_items, desc="总进度", unit="图") as pbar:
+        # 处理每个章节文件
+        for chapter_file_path in chapter_file_paths:
+            # 获取完整的json文件名（不含路径）
+            json_filename = os.path.basename(chapter_file_path).split(".")[0]
+
+            # 读取章节数据
+            with open(chapter_file_path, "r", encoding="utf-8") as f:
+                chapter_data = json.load(f)
+                # 根据 id字段从小到大排序
+                chapter_data.sort(key=lambda x: int(x["id"]))
+
+            # 标记是否需要更新JSON文件
+            json_updated = False
+
+            # 处理章节中的每个对象
+            for item_idx, item in enumerate(chapter_data):
+                # 获取id，如果不存在则使用索引
+                item_id = item.get("id", f"index_{item_idx}")
+
+                # 获取提示词
+                if "lensLanguage_end" in item:
+                    prompt = item["lensLanguage_end"]
+                    # 使用逗号将他们分隔为数组
+                    prompt = prompt.split(",")
+                    # 从新将他们拼接为字符串,只取前30个 不足30个则全部取
+                    prompt = ",".join(prompt[:30])
+                    # 修改图片保存目录结构：data/book/{book_id}/images/{json文件名}/{数据中的id}
+                    images_base_dir = f"data/book/{book_id}/images"
+                    json_file_dir = os.path.join(images_base_dir, json_filename)
+                    os.makedirs(json_file_dir, exist_ok=True)
+
+                    # 设置图片保存路径，使用.jpg后缀
+                    image_path = os.path.join(json_file_dir, f"{item_id}.jpg")
+                    error_path = os.path.join(json_file_dir, f"{item_id}.txt")
+
+                    # 如果图片已存在，跳过
+                    if os.path.exists(image_path):
+                        # 检查是否需要更新JSON数据中的image_path字段
+                        if "image_path" not in item:
+                            # 添加相对路径到JSON数据
+                            relative_image_path = f"data/book/{book_id}/images/{json_filename}/{item_id}.jpg"
+                            item["image_path"] = relative_image_path
+                            json_updated = True
+                        gc.collect()
+                    else:
+                        # 尝试生成图片，最多重试3次
+                        retry_count = 0
+                        success = False
+                        error_msg = ""
+
+                        while retry_count < 3 and not success:
+                            try:
+                                # 生成图片
+                                base64_image = create_Image(prompt)
+
+                                # 保存图片
+                                save_result = save_base64_image(
+                                    base64_image, image_path
+                                )
+                                del base64_image
+                                gc.collect()
+                                if save_result is True:
+                                    success = True
+                                    # 添加image_path字段到JSON数据
+                                    relative_image_path = f"data/book/{book_id}/images/{json_filename}/{item_id}.jpg"
+                                    item["image_path"] = relative_image_path
+                                    json_updated = True
+                                    del save_result
+                                    gc.collect()
+                                else:
+                                    error_msg = f"保存图片失败: {save_result}"
+                                    retry_count += 1
+                                    time.sleep(1)  # 等待1秒后重试
+                            except Exception as e:
+                                error_msg = (
+                                    f"生成图片失败 (尝试 {retry_count+1}/3): {str(e)}"
+                                )
+                                retry_count += 1
+                                time.sleep(2)  # 等待2秒后重试
+
+                        # 如果所有重试都失败，保存错误信息
+                        if not success:
+                            save_error_message(error_msg, error_path)
+                # 更新进度条
+                pbar.update(1)
+                # 定期释放内存
+                if item_idx % 10 == 0:
+                    gc.collect()
+                # time.sleep(0.1)
+            # 如果有更新，保存更新后的JSON文件
+            if json_updated:
+                with open(chapter_file_path, "w", encoding="utf-8") as f:
+                    json.dump(chapter_data, f, ensure_ascii=False, indent=2)
+            # 每处理完一个章节，强制清理内存
+            del chapter_data
+            gc.collect()
+
+
+def get_book_images(book_id: str):
+    # 获取 data/book/{book_id}/storyboard 目录下的所有json
+    storyboard_dir = f"data/book/{book_id}/storyboard"
+    chapter_files = os.listdir(storyboard_dir)
+    chapter_files.sort(key=lambda x: int(x.split(".")[0]))
+    chapter_file_paths = [os.path.join(storyboard_dir, f) for f in chapter_files]
+
+    # 计算总进度
+    total_items = 0
+    for chapter_file_path in chapter_file_paths:
+        with open(chapter_file_path, "r", encoding="utf-8") as f:
+            chapter_data = json.load(f)
+            total_items += len(chapter_data)
+
+    # 创建总进度条
+    with tqdm(total=total_items, desc="总进度", unit="图") as pbar:
+        # 遍历每个章节文件
+        for chapter_file_path in chapter_file_paths:
+            # 读取章节数据
+            with open(chapter_file_path, "r", encoding="utf-8") as f:
+                chapter_data = json.load(f)
+                # 根据 id字段从小到大排序
+                chapter_data.sort(key=lambda x: int(x["id"]))
+                # 遍历每个对象
+                for item in chapter_data:
+                    if "image_path" in item:
+                        image_path = item["image_path"]
+
+                        # 检查图片大小是否超过2MB
+                        if os.path.exists(image_path):
+                            file_size_mb = os.path.getsize(image_path) / (1024 * 1024)
+                            if file_size_mb > 2:
+                                pbar.update(1)
+                                # 删除log文件
+                                delete_log_file()
+                                continue
+
+                        # 高清修复
+                        upscale_result = upscale_image(image_path)
+                        if upscale_result is True:
+                            # 更新进度条
+                            pbar.update(1)
+                            # 删除log文件
+                            delete_log_file()
+                        else:
+                            # 重试
+                            retry_count = 0
+                            while retry_count < 3:
+                                upscale_result = upscale_image(image_path)
+                                if upscale_result is True:
+                                    # 更新进度条
+                                    pbar.update(1)
+                                    # 删除log文件
+                                    delete_log_file()
+                                    break
+                                retry_count += 1
+            
+
+
+
+
+if __name__ == "__main__":
+    get_book_content("1043294775")
+    get_book_images("1043294775")
+</file>
+
+<file path="app/main.py">
+import requests
+from dotenv import load_dotenv
+import os
+from bs4 import BeautifulSoup
+import json
+import os
+import re
+from tool import clean_text, extract_chapter_id_and_name
+from tqdm import tqdm
+import time
+
+load_dotenv()
+
+
+def get_book_content(book_id: str) -> str:
+    """
+    获取书籍内容
+    """
+    try:
+        url = f"https://www.qidian.com/book/{book_id}/"
+
+        payload = {}
+        headers = {
+            "Cookie": os.getenv("COOKIE"),
+            "accept": "*/*",
+            "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        }
+
+        response = requests.request("GET", url, headers=headers, data=payload)
+
+        # 将内容保存至 /data/book/{book_id}/{book_id}.html
+        os.makedirs(f"data/book/{book_id}", exist_ok=True)
+        with open(f"data/book/{book_id}/{book_id}.html", "w", encoding="utf-8") as f:
+            f.write(response.text)
+        # 返回书籍文件路径
+        return f"data/book/{book_id}/{book_id}.html"
+    except Exception as e:
+        print(e)
+        return False
+
+
+# 解析书籍章节
+def extract_free_chapters(html_file: str, book_id: str) -> list:
+    """
+    从HTML文件中提取免费章节信息并转为JSON格式
+
+    参数:
+        html_file (str): HTML文件路径
+
+    返回:
+        list: 包含章节信息的列表，每个章节为一个字典
+    """
+    try:
+        # 读取HTML文件
+        with open(html_file, "r", encoding="utf-8") as file:
+            html_content = file.read()
+            # 解析HTML内容
+        soup = BeautifulSoup(html_content, "html.parser")
+
+        # 查找第一个类名为volume-chapters的ul元素
+        volume_chapters = soup.find("ul", class_="volume-chapters")
+        if not volume_chapters:
+            return []
+
+        chapters = []
+
+        # 查找所有章节项
+        chapter_items = volume_chapters.find_all("li", class_="chapter-item")
+        for item in chapter_items:
+            # 获取章节链接
+            link = item.find("a", class_="chapter-name")
+            if link:
+                href = link.get("href")
+                title = link.get_text(strip=True)
+
+                # 清理标题中的换行符和多余空格
+                title = clean_text(title)
+
+                # 提取章节编号和名称
+                chapter_id, chapter_name = extract_chapter_id_and_name(title)
+
+                # 将相对URL转换为绝对URL
+                if href and href.startswith("//"):
+                    href = "https:" + href
+
+                # 使用要求的字段名格式
+                chapter_info = {"id": chapter_id, "name": chapter_name, "url": href}
+
+                chapters.append(chapter_info)
+
+        # 将章节信息转换为JSON格式
+        chapters_json = json.dumps(chapters, ensure_ascii=False, indent=4)
+
+        # 将内容保存至 /data/book/{book_id}/{book_id}.json
+        os.makedirs(f"data/book/{book_id}", exist_ok=True)
+        with open(f"data/book/{book_id}/{book_id}.json", "w", encoding="utf-8") as f:
+            f.write(chapters_json)
+        return True
+    except Exception as e:
+        print(e)
+        return False
+
+
+# 获取每一章的详细内容
+def get_chapter_content(book_id: str) -> str:
+    """
+    从HTML文本中提取小说内容并保存到文件
+
+    参数:
+        html_text: 包含小说内容的HTML文本
+        output_filename: 保存提取内容的文件名
+    """
+    try:
+        # 读取章节信息List
+        with open(f"data/book/{book_id}/{book_id}.json", "r", encoding="utf-8") as file:
+            chapters = json.load(file)
+        # 使用进度条
+        for (index, chapter) in tqdm(enumerate(chapters), desc="获取章节内容"):
+            if chapter["url"]:
+                payload = {}
+                headers = {
+                    "Cookie": os.getenv("COOKIE"),
+                    "accept": "*/*",
+                    "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                }
+                response = requests.request(
+                    "GET", chapter["url"], headers=headers, data=payload
+                )
+                # 创建BeautifulSoup对象解析HTML
+                soup = BeautifulSoup(response.text, "html.parser")
+                # 查找main标签 - 小说内容在main标签内
+                main_content = soup.find("main", id=lambda x: x and x.startswith("c-"))
+                if not main_content:
+                    print("未找到小说内容")
+                    return
+                # 找到所有p标签 - 每个p标签包含一段小说内容
+                paragraphs = main_content.find_all("p")
+                # 提取每个p标签的文本
+                novel_content = [p.get_text() for p in paragraphs]
+                # 将内容保存到文件中
+                try:
+                    # 创建目录
+                    os.makedirs(f"data/book/{book_id}/list", exist_ok=True)
+                    output_filename = f"data/book/{book_id}/list/{index}.txt"
+                    with open(output_filename, "w", encoding="utf-8") as file:
+                        for line in novel_content:
+                            file.write(line + "\n")
+                except Exception as e:
+                    print(f"保存文件时出错: {e}")
+            time.sleep(0.5)
+    except Exception as e:
+        print(e)
+        return False
+
+
+if __name__ == "__main__":
+    book = get_book_content("1043294775")
+    if book:
+        extract_free_chapters(book, "1043294775")
+        get_chapter_content("1043294775")
+    else:
+        print("获取书籍内容失败")
+</file>
+
+<file path="app/prompt.py">
+from openai import OpenAI
+import json
+import os
+import re
+import concurrent.futures
+import threading
+from tqdm import tqdm
+from dotenv import load_dotenv
+
+load_dotenv()
+
+
+# 用于线程安全的打印
+print_lock = threading.Lock()
+
+
+def safe_print(message):
+    with print_lock:
+        print(message)
+
+
+prompt = """
+StableDiffusion是一款利用深度学习的文生图模型，支持通过使用提示词来产生新的图像，描述要包含或省略的元素。
+我在这里引入StableDiffusion算法中的Prompt概念，又被称为提示符。
+下面的prompt是用来指导AI绘画模型创作图像的。它们包含了图像的各种细节，如人物的外观、背景、颜色和光线效果，以及图像的主题和风格。这些prompt的格式经常包含括号内的加权数字，用于指定某些细节的重要性或强调。例如，"(masterpiece:1.5)"表示作品质量是非常重要的，多个括号也有类似作用。此外，如果使用中括号，如"{blue hair:white hair:0.3}"，这代表将蓝发和白发加以融合，蓝发占比为0.3。
+以下是用prompt帮助AI模型生成图像的例子：masterpiece,(bestquality),highlydetailed,ultra-detailed,cold,solo,(1girl),(detailedeyes),(shinegoldeneyes),(longliverhair),expressionless,(long sleeves),(puffy sleeves),(white wings),shinehalo,(heavymetal:1.2),(metaljewelry),cross-lacedfootwear (chain),(Whitedoves:1.2)
+需要多增加一些漫画风格以及漫画的细节的关键词进来
+
+仿照例子，给出一套详细描述以下内容的prompt。直接开始给出prompt不需要用自然语言描述不要出现人名不要使用中文：
+"""
+
+
+# 创建OpenAI客户端
+def create_client():
+    return OpenAI(
+        api_key=os.getenv("AL_API_KEY"),
+        base_url=os.getenv("AL_API_URL"),
+    )
+
+
+# 润色提示词
+def refine_prompt(text: str, board_info: str, client=None) -> str:
+    global prompt
+    if client is None:
+        client = create_client()
+
+    _text = f"""
+        以下是小说分镜音频文案：{text}
+        以下是小说分镜关键字：{board_info}
+        这是一本漫画小说
+    """
+
+    try:
+        response = client.chat.completions.create(
+            model="deepseek-v3",
+            messages=[
+                {"role": "system", "content": prompt},
+                {"role": "user", "content": _text},
+            ],
+        )
+        return response.choices[0].message.content
+    except Exception as e:
+        safe_print(f"API调用失败: {e}")
+        raise
+
+
+# 处理分镜文本的异常
+def handle_board_text_exception(text: str) -> str:
+    # 如果text中包含\n，则将\n替换为空
+    text = text.replace("\n", "")
+    # 如果text中包含\r，则将\r替换为空
+    text = text.replace("\r", "")
+    # 如果text中包含\t，则将\t替换为空
+    text = text.replace("\t", "")
+    # 如果text中包含多个连续空格，则将多个空格替换为空
+    text = re.sub(r"\s+", "", text)
+    return text
+
+
+# 处理单个分镜对象
+def process_single_item(item, client):
+    item_id = item.get("id", "未知")
+
+    # 检查是否已处理过（已有lensLanguage_end字段）
+    if "lensLanguage_end" in item and item["lensLanguage_end"]:
+        safe_print(f"跳过已处理的ID: {item_id}")
+        return item, "skipped"
+
+    # 预处理文本
+    original_text = item.get("text", "")
+    processed_text = handle_board_text_exception(original_text)
+    item["text"] = processed_text
+
+    # 生成优化的提示词
+    try:
+        lens_language = refine_prompt(processed_text, processed_text, client)
+        item["lensLanguage_end"] = lens_language
+        return item, "success"
+    except Exception as e:
+        # 处理失败时，使用lensLanguage_en的值作为备选
+        if "lensLanguage_en" in item and item["lensLanguage_en"]:
+            item["lensLanguage_end"] = item["lensLanguage_en"]
+            safe_print(f"处理ID: {item_id} 时出错，使用lensLanguage_en作为备选")
+            return item, "fallback"
+        else:
+            safe_print(f"处理ID: {item_id} 时出错，且无可用的lensLanguage_en: {e}")
+            return item, "error"
+
+
+# 处理单个章节文件
+def process_chapter_file(chapter_file_path, max_workers=10):
+    try:
+        # 读取文件内容
+        with open(chapter_file_path, "r", encoding="utf-8") as f:
+            board_info = json.load(f)
+
+        # 创建客户端
+        client = create_client()
+
+        # 使用线程池处理每个对象
+        processed_items = []
+        result_stats = {"success": 0, "fallback": 0, "error": 0, "skipped": 0}
+        total_items = len(board_info)
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # 提交所有任务
+            future_to_item = {
+                executor.submit(process_single_item, item, client): item
+                for item in board_info
+            }
+
+            # 处理结果，使用tqdm显示进度
+            for future in tqdm(
+                concurrent.futures.as_completed(future_to_item),
+                total=total_items,
+                desc=f"处理 {os.path.basename(chapter_file_path)}",
+            ):
+                item_result, status = future.result()
+                processed_items.append(item_result)
+                result_stats[status] += 1
+
+        # 写回文件
+        with open(chapter_file_path, "w", encoding="utf-8") as f:
+            json.dump(processed_items, f, ensure_ascii=False, indent=2)
+
+        safe_print(f"已完成文件 {os.path.basename(chapter_file_path)} 的处理")
+        safe_print(
+            f"统计: 成功={result_stats['success']}, 使用备选={result_stats['fallback']}, 错误={result_stats['error']}, 跳过={result_stats['skipped']}"
+        )
+        return True
+    except Exception as e:
+        safe_print(f"处理文件 {os.path.basename(chapter_file_path)} 时出错: {e}")
+        return False
+
+
+# 多线程处理所有分镜文件
+def process_board_files(book_id: str, file_threads=5, item_threads=10) -> None:
+    # 读取 data/book/{book_id}/storyboard/*.json
+    storyboard_dir = f"data/book/{book_id}/storyboard"
+    if not os.path.exists(storyboard_dir):
+        print(f"目录不存在: {storyboard_dir}")
+        return
+
+    # 按文件名排序
+    chapter_files = os.listdir(storyboard_dir)
+    chapter_files.sort(key=lambda x: int(x.split(".")[0]))
+    chapter_file_paths = [os.path.join(storyboard_dir, f) for f in chapter_files]
+
+    # 使用线程池处理文件
+    with concurrent.futures.ThreadPoolExecutor(max_workers=file_threads) as executor:
+        # 提交所有任务
+        futures = [
+            executor.submit(process_chapter_file, path, item_threads)
+            for path in chapter_file_paths
+        ]
+
+        # 处理结果
+        for i, future in enumerate(concurrent.futures.as_completed(futures)):
+            try:
+                result = future.result()
+                if result:
+                    safe_print(f"成功处理文件 {i+1}/{len(chapter_files)}")
+                else:
+                    safe_print(f"处理文件失败 {i+1}/{len(chapter_files)}")
+            except Exception as e:
+                safe_print(f"处理文件时发生异常: {e}")
+
+
+if __name__ == "__main__":
+    book_id = "1043294775"  # 可以作为参数传入
+    # 设置文件级别的线程数和处理每个文件内分镜的线程数
+    file_threads = 2  # 同时处理的文件数
+    item_threads = 10  # 每个文件内同时处理的分镜对象数
+    process_board_files(book_id, file_threads, item_threads)
+</file>
+
+<file path="app/tool.py">
+import re
+
+
+def clean_text(text):
+    """
+    清理文本中的换行符和多余空格
+    
+    参数:
+        text (str): 需要清理的文本
+    
+    返回:
+        str: 清理后的文本
+    """
+    if not text:
+        return ""
+    
+    # 移除换行符
+    text = text.replace('\n', '')
+    
+    # 移除多余空格（将多个空格替换为单个空格）
+    text = re.sub(r'\s+', ' ', text)
+    
+    # 去除首尾空格
+    text = text.strip()
+    
+    return text
+
+def extract_chapter_id_and_name(title):
+    """
+    从章节标题中提取章节编号和名称
+    
+    参数:
+        title (str): 章节完整标题
+    
+    返回:
+        tuple: (章节编号, 章节名称)
+    """
+    # 使用正则表达式匹配"第X章"格式
+    match = re.search(r'^(第\d+章)', title)
+    
+    if match:
+        # 提取章节编号（包括"章"字）
+        chapter_id = match.group(1)
+        # 章节名称为剩余部分（去除前后空格）
+        chapter_name = title[len(chapter_id):].strip()
+        return chapter_id, chapter_name
+    
+    # 如果没有匹配到标准格式，返回空ID和原标题
+    return "", title
+</file>
+
+<file path="app/tts.py">
+import torch
+from transformers import WhisperProcessor, WhisperForConditionalGeneration
+import librosa
+import numpy as np
+import os
+import re
+from tqdm import tqdm
+import json
+
+
+def generate_subtitle(
+    audio_file,
+    output_srt=None,
+    model_size="medium",
+    language="zh",
+    silence_threshold=0.05,
+    min_silence_duration=0.3,
+    precision_mode="high",
+):
+    """
+    将音频文件转换为高精度的 SRT 字幕文件
+
+    参数:
+        audio_file (str): 输入音频文件路径
+        output_srt (str, optional): 输出 SRT 文件路径
+        model_size (str, optional): Whisper 模型大小 ("tiny", "base", "small", "medium", "large")
+        language (str, optional): 音频语言代码，默认为中文 "zh"
+        silence_threshold (float, optional): 静音检测阈值 (0-1)
+        min_silence_duration (float, optional): 最小静音持续时间（秒）
+        precision_mode (str, optional): 精度模式 ("standard", "high", "maximum")
+
+    返回:
+        str: 生成的字幕文件路径
+    """
+    # 设置默认输出文件名
+    if output_srt is None:
+        base_name = os.path.splitext(audio_file)[0]
+        output_srt = f"{base_name}.srt"
+
+    # print(f"处理音频文件: {audio_file}")
+
+    # 加载模型和处理器
+    model_id = f"openai/whisper-{model_size}"
+    processor = WhisperProcessor.from_pretrained(model_id)
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    # print(f"使用设备: {device}")
+
+    model = WhisperForConditionalGeneration.from_pretrained(
+        model_id, torch_dtype=torch.float16, device_map="auto"
+    )
+
+    # 音频加载与分析
+    # print("加载和分析音频...")
+    input_audio, sampling_rate = librosa.load(audio_file, sr=16000)
+
+    # 计算音频时长
+    audio_duration = len(input_audio) / sampling_rate
+    # print(f"音频时长: {audio_duration:.2f} 秒")
+
+    # 开始转录过程
+    # print("进行音频转录...")
+    input_features = processor.feature_extractor(
+        input_audio, sampling_rate=16000, return_tensors="pt"
+    ).input_features
+    input_features = input_features.to(device=device, dtype=torch.float16)
+
+    with torch.no_grad():
+        generated_ids = model.generate(
+            input_features=input_features, language=language, task="transcribe"
+        )
+
+    # 解码转录文本
+    transcription = processor.batch_decode(generated_ids, skip_special_tokens=True)[0]
+    # print(f"转录文本: {transcription}")
+
+    # 基于精度模式选择分段策略
+    segments = []
+    if precision_mode in ["high", "maximum"]:
+        # 高精度模式: 结合静音检测和语音分析
+        segments = enhance_segmentation(
+            input_audio,
+            sampling_rate,
+            transcription,
+            language,
+            silence_threshold,
+            min_silence_duration,
+        )
+    else:
+        # 标准模式: 基于句子分割
+        sentences = split_into_sentences(transcription, language)
+        # print(f"文本被分割成 {len(sentences)} 个句子")
+
+        if sentences:
+            # 分配时间戳
+            segments = distribute_timing(sentences, audio_duration)
+
+    # 如无分段，使用完整转录
+    if not segments and transcription.strip():
+        segments = [{"start": 0, "end": audio_duration, "text": transcription.strip()}]
+
+    # print(f"生成了 {len(segments)} 个字幕分段")
+
+    # 写入 SRT 文件
+    with open(output_srt, "w", encoding="utf-8") as srt_file:
+        for i, segment in enumerate(segments):
+            start_time = format_timestamp(segment["start"])
+            end_time = format_timestamp(segment["end"])
+            text = segment["text"].strip()
+
+            # 写入 SRT 格式
+            srt_file.write(f"{i+1}\n")
+            srt_file.write(f"{start_time} --> {end_time}\n")
+            srt_file.write(f"{text}\n\n")
+
+    # 验证文件大小
+    file_size = os.path.getsize(output_srt)
+    # print(f"字幕文件已保存至: {output_srt} (文件大小: {file_size} 字节)")
+
+    return output_srt
+
+
+def enhance_segmentation(
+    audio, sr, transcription, language, silence_threshold=0.05, min_silence_duration=0.3
+):
+    """使用静音检测和语音分析增强分段"""
+    # print("执行增强分段分析...")
+
+    # 步骤 1: 检测静音段
+    # print("检测静音段...")
+    # 计算音频振幅包络线
+    amplitude_envelope = np.abs(audio)
+
+    # 标准化并应用阈值
+    amplitude_envelope = amplitude_envelope / np.max(amplitude_envelope)
+    silence_mask = amplitude_envelope < silence_threshold
+
+    # 找出连续的静音区域
+    silence_regions = []
+    silence_start = None
+    for i in range(len(silence_mask)):
+        if silence_mask[i] and silence_start is None:
+            silence_start = i
+        elif not silence_mask[i] and silence_start is not None:
+            duration = (i - silence_start) / sr
+            if duration >= min_silence_duration:
+                silence_regions.append({"start": silence_start / sr, "end": i / sr})
+            silence_start = None
+
+    # 处理末尾的静音
+    if silence_start is not None:
+        duration = (len(silence_mask) - silence_start) / sr
+        if duration >= min_silence_duration:
+            silence_regions.append(
+                {"start": silence_start / sr, "end": len(silence_mask) / sr}
+            )
+
+    # print(f"检测到 {len(silence_regions)} 个静音区域")
+
+    # 步骤 2: 基于静音区域分割语音段
+    speech_regions = []
+    if silence_regions:
+        last_end = 0
+        for region in silence_regions:
+            # 如果静音前有语音
+            if region["start"] > last_end:
+                speech_regions.append({"start": last_end, "end": region["start"]})
+            last_end = region["end"]
+
+        # 添加最后一个语音段
+        if last_end < len(audio) / sr:
+            speech_regions.append({"start": last_end, "end": len(audio) / sr})
+    else:
+        # 如果没有检测到静音，将整个音频作为一个语音段
+        speech_regions.append({"start": 0, "end": len(audio) / sr})
+
+    # print(f"划分出 {len(speech_regions)} 个语音区域")
+
+    # 步骤 3: 将文本与语音段对应
+    segments = []
+
+    # 分割成句子
+    sentences = split_into_sentences(transcription, language)
+
+    if not sentences:
+        # 如果没有句子，直接返回语音段
+        for region in speech_regions:
+            segments.append(
+                {"start": region["start"], "end": region["end"], "text": transcription}
+            )
+    elif len(sentences) <= len(speech_regions):
+        # 如果句子数量小于或等于语音段数量，可以一一对应
+        for i, sentence in enumerate(sentences):
+            if i < len(speech_regions):
+                segments.append(
+                    {
+                        "start": speech_regions[i]["start"],
+                        "end": speech_regions[i]["end"],
+                        "text": sentence.strip(),
+                    }
+                )
+    else:
+        # 如果句子数量多于语音段，需要合并一些句子
+        # 使用贪婪算法分配句子到语音段
+        current_region = 0
+        current_text = ""
+
+        for sentence in sentences:
+            current_text += sentence
+
+            # 如果当前文本大致匹配当前语音段的长度，或者是最后一个语音段
+            if (
+                len(current_text) / len(transcription)
+                > (
+                    speech_regions[current_region]["end"]
+                    - speech_regions[current_region]["start"]
+                )
+                / (len(audio) / sr)
+            ) or current_region == len(speech_regions) - 1:
+
+                segments.append(
+                    {
+                        "start": speech_regions[current_region]["start"],
+                        "end": speech_regions[current_region]["end"],
+                        "text": current_text.strip(),
+                    }
+                )
+
+                current_text = ""
+                current_region += 1
+
+                if current_region >= len(speech_regions):
+                    break
+
+        # 处理剩余句子（如果有）
+        if current_text and current_region < len(speech_regions):
+            segments.append(
+                {
+                    "start": speech_regions[current_region]["start"],
+                    "end": speech_regions[current_region]["end"],
+                    "text": current_text.strip(),
+                }
+            )
+
+    return segments
+
+
+def split_into_sentences(text, language="zh"):
+    """根据语言特定的标点符号将文本分割成句子"""
+    if language in ["zh", "ja", "ko"]:
+        # 中文、日文、韩文
+        pattern = r"[。！？!?.;；,，]+"
+    else:
+        # 拉丁语系
+        pattern = r"[.!?]+"
+
+    # 分割并清理
+    sentences = re.split(pattern, text)
+    sentences = [s.strip() for s in sentences if s.strip()]
+
+    return sentences
+
+
+def distribute_timing(sentences, audio_duration):
+    """根据句子长度比例分配时间戳"""
+    segments = []
+    total_chars = sum(len(s) for s in sentences)
+
+    if total_chars > 0:
+        current_time = 0
+        for sentence in sentences:
+            if sentence.strip():
+                # 根据字符数估算时长
+                sentence_duration = (len(sentence) / total_chars) * audio_duration
+
+                # 添加略微重叠以避免不自然的停顿
+                segments.append(
+                    {
+                        "start": max(0, current_time - 0.1),
+                        "end": current_time + sentence_duration,
+                        "text": sentence.strip(),
+                    }
+                )
+                current_time += sentence_duration
+
+    return segments
+
+
+def format_timestamp(seconds):
+    """将秒数转换为 SRT 格式的时间戳：00:00:00,000"""
+    milliseconds = int((seconds % 1) * 1000)
+    hours, remainder = divmod(int(seconds), 3600)
+    minutes, seconds = divmod(remainder, 60)
+    return f"{hours:02d}:{minutes:02d}:{seconds:02d},{milliseconds:03d}"
+
+
+def create_tts(book_id: str, base_path: str):
+    # 从环境变量获取线程数
+    try:
+        num_threads = int(os.getenv("VIDEO_THREADS", "1"))
+    except ValueError:
+        num_threads = 1  # 默认使用1个线程
+
+    # 获取 data/book/{book_id}/storyboard 目录下的所有json
+    storyboard_dir = f"data/book/{book_id}/storyboard"
+    if not os.path.exists(storyboard_dir):
+        # print(f"小说信息不存在{storyboard_dir}")
+        return
+    try:
+        chapter_files = os.listdir(storyboard_dir)
+        chapter_files.sort(key=lambda x: int(x.split(".")[0]))
+        chapter_file_paths = [os.path.join(storyboard_dir, f) for f in chapter_files]
+    except Exception as e:
+        # print(f"读取章节文件失败：{str(e)}")
+        return
+    # 计算总进度
+    total_items = 0
+    try:
+        for chapter_file_path in chapter_file_paths:
+            with open(chapter_file_path, "r", encoding="utf-8") as f:
+                chapter_data = json.load(f)
+                total_items += len(chapter_data)
+    except Exception as e:
+        print(f"计算总进度失败：{str(e)}")
+        return
+    # 创建总进度条
+    with tqdm(total=total_items, desc="总进度", unit="图") as pbar:
+        for chapter_file_path in chapter_file_paths:
+            with open(chapter_file_path, "r", encoding="utf-8") as f:
+                chapter_data = json.load(f)
+                for item in chapter_data:
+                    audio_path = item["audio_path"]
+                    # 判断 audio_path 中是否有 data/ 文字 如果有则不处理 没有的话 需要再前面添加上 /data/book/{book_id}/
+                    if "data/" in audio_path:
+                        continue
+                    else:
+                        audio_path = f"data/book/{book_id}/{audio_path}"
+                    audio_path = os.path.join(base_path, audio_path)
+                    generate_subtitle(audio_path, precision_mode="high")
+                    pbar.update(1)
+
+
+if __name__ == "__main__":
+    create_tts("1043294775", os.getcwd())
+</file>
+
+<file path="app/video_end.py">
+import os
+import subprocess
+
+
+def save_output_video(book_id):
+    # 使用os.path.join合并路径
+    video_dir = os.path.join(os.getcwd(), "data", "book", str(book_id), "video")
+    # 设置最终保存位置
+    output_file = os.path.join(
+        os.getcwd(), "data", "book", str(book_id), str(book_id) + ".mp4"
+    )
+    # 递归遍历这个目录下的所有视频
+    video_paths = []
+    for root, dirs, files in os.walk(video_dir):
+        for file in files:
+            if file.endswith(".mp4"):
+                # 使用os.path.join合并完整路径
+                video_paths.append(os.path.join(root, file))
+
+    # 对视频路径进行排序
+    def sort_key(path):
+        # 从路径中提取文件夹编号和文件编号
+        parts = path.replace("\\", "/").split("/")
+        folder_num = int(parts[-2])  # 倒数第二个部分是文件夹编号
+        file_num = int(
+            parts[-1].split(".")[0]
+        )  # 最后一个部分是文件名，去掉.mp4后转为数字
+        return (folder_num, file_num)
+
+    video_paths.sort(key=sort_key)
+
+    # 获取concat_list.txt的完整路径
+    concat_list_path = os.path.join(os.getcwd(), "concat_list.txt")
+
+    # 如果文件存在，先删除
+    if os.path.exists(concat_list_path):
+        os.remove(concat_list_path)
+
+    # 将视频路径写入文件，每行前面加上"file "
+    with open(concat_list_path, "w", encoding="utf-8") as f:
+        for path in video_paths:
+            # 将路径转换为正确的格式：
+            # 1. 替换所有反斜杠为正斜杠
+            # 2. 在路径两边加上单引号，以处理可能包含空格的路径
+            formatted_path = path.replace("\\", "/")
+            f.write(f"file '{formatted_path}'\n")
+    # 添加内存优化参数
+    result = subprocess.call(
+        [
+            "ffmpeg",
+            "-f",
+            "concat",
+            "-safe",
+            "0",
+            "-i",
+            "concat_list.txt",
+            "-c",
+            "copy",
+            "-max_muxing_queue_size",
+            "9999",  # 增加复用队列大小
+            "-threads",
+            "1",  # 减少线程数以降低内存
+            output_file,
+        ]
+    )
+    if result == 0:
+        print(f"视频合并成功，保存位置: {output_file}")
+    else:
+        print(f"视频合并失败，错误码: {result}")
+
+
+if __name__ == "__main__":
+    save_output_video("1043294775")
+</file>
+
+<file path="app/video.py">
+import PIL.Image
+import numpy as np
+from moviepy.editor import ImageClip, AudioFileClip, CompositeVideoClip
+import librosa
+import soundfile as sf
+import os
+import tempfile
+import time
+import logging
+import threading
+from tqdm import tqdm
+import requests
+from dotenv import load_dotenv
+import json
+import concurrent.futures
+import random
+from PIL import Image
+
+# 设置日志 - 仅记录错误
+logging.basicConfig(
+    level=logging.ERROR,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    handlers=[logging.StreamHandler()],
+)
+logger = logging.getLogger(__name__)
+
+# 加载环境变量
+load_dotenv(override=True)
+
+# 线程锁字典，用于防止同时写入同一个JSON文件
+json_locks = {}
+
+# Add compatibility patch for ANTIALIAS
+if not hasattr(PIL.Image, "ANTIALIAS"):
+    PIL.Image.ANTIALIAS = PIL.Image.LANCZOS
+
+
+def create_video_with_moving_image(
+    image_path,
+    audio_path,
+    output_path,
+    move_direction="left",
+    portrait_mode=False,
+    video_width=None,
+    video_height=None,
+    move_distance=0.1,
+    move_speed=1.0,
+    entrance_effect=False,
+    entrance_duration=1.0,
+    entrance_direction="left",
+    audio_speed=1.0,  # 控制音频播放速度
+):
+    """
+    创建一个将图片与音频合成的视频，图片会在音频播放期间以指定速度朝指定方向移动，可选添加入场效果及调整音频速度。
+    如果存在同名的.srt字幕文件，会将字幕添加到视频中。
+
+    参数:
+        image_path (str): 图片文件路径
+        audio_path (str): 音频文件路径
+        output_path (str): 输出视频保存路径
+        move_direction (str): 图片移动方向，可选值为 "up", "down", "left", "right"，默认为 "left"
+        portrait_mode (bool): 是否使用竖屏模式 (750x1280)，默认为横屏模式 (2560x1440)
+        video_width (int): 自定义输出视频宽度（优先级高于预设格式）
+        video_height (int): 自定义输出视频高度（优先级高于预设格式）
+        move_distance (float): 移动距离，以图片尺寸的比例表示，默认为0.1
+        move_speed (float): 移动速度，值越大移动越快，默认为1.0
+        entrance_effect (bool): 是否启用入场效果，默认为False
+        entrance_duration (float): 入场效果持续时间（秒），默认为1.0秒
+        entrance_direction (str): 入场方向，可选值为 "up", "down", "left", "right"，默认为 "left"
+        audio_speed (float): 音频播放速度，默认为1.0（正常速度），推荐范围0.5-2.0
+
+    返回:
+        bool: 处理成功返回True，失败返回False
+    """
+    try:
+        import numpy as np
+        from PIL import Image, ImageDraw, ImageFont
+        from moviepy.editor import (
+            AudioFileClip,
+            ImageClip,
+            CompositeVideoClip,
+            TextClip,
+        )
+        import os
+        import tempfile
+        import librosa
+        import soundfile as sf
+        import platform
+
+        # 确定最终尺寸
+        if video_width is not None and video_height is not None:
+            # 使用自定义尺寸
+            final_width = video_width
+            final_height = video_height
+        else:
+            # 使用预设格式
+            if portrait_mode:
+                # 竖屏模式 (750x1280)
+                final_width, final_height = 750, 1280
+            else:
+                # 横屏模式 (2560x1440)
+                final_width, final_height = 2560, 1440
+
+        # 加载原始音频
+        original_audio = AudioFileClip(audio_path)
+
+        # 调整音频速度（保持音调不变）
+        if audio_speed != 1.0:
+            try:
+                # 使用librosa进行高质量的音频处理
+                # 创建临时文件用于处理
+                temp_folder = tempfile.gettempdir()
+                temp_input = os.path.join(temp_folder, "temp_input.wav")
+                temp_output = os.path.join(temp_folder, "temp_output.wav")
+
+                # 保存原始音频为临时文件
+                original_audio.write_audiofile(temp_input, verbose=False, logger=None)
+
+                # 使用librosa加载音频
+                y, sr = librosa.load(temp_input, sr=None)
+
+                # 使用librosa的time_stretch函数调整速度（不改变音调）
+                y_stretched = librosa.effects.time_stretch(y, rate=audio_speed)
+
+                # 保存处理后的音频
+                sf.write(temp_output, y_stretched, sr)
+
+                # 加载处理后的音频
+                audio = AudioFileClip(temp_output)
+
+                # 清理临时文件
+                try:
+                    os.remove(temp_input)
+                    os.remove(temp_output)
+                except:
+                    pass
+            except Exception as e:
+                print(f"音频速度调整失败，将使用原始音频。错误: {e}")
+                audio = original_audio
+        else:
+            audio = original_audio
+
+        # 获取调整后的音频时长
+        audio_duration = audio.duration
+
+        # 加载图片
+        image_clip = ImageClip(image_path)
+
+        # 计算基础缩放因子以保持图片比例适配视频尺寸
+        width_ratio = final_width / image_clip.size[0]
+        height_ratio = final_height / image_clip.size[1]
+        base_scale_factor = min(width_ratio, height_ratio)
+
+        # 根据移动速度和移动距离计算所需的额外缩放
+        extra_scale = 1.0 + (move_speed * move_distance)
+
+        # 最终缩放因子，基础值为1.4倍
+        scale_factor = base_scale_factor * 1.4 * extra_scale
+
+        # 调整图片大小
+        resized_image = image_clip.resize(scale_factor)
+
+        # 计算图片与视频框架之间的可用移动距离
+        extra_width = resized_image.size[0] - final_width
+        extra_height = resized_image.size[1] - final_height
+
+        # 确保额外距离为正值
+        extra_width = max(0, extra_width)
+        extra_height = max(0, extra_height)
+
+        # 计算安全移动距离（不会导致黑边）
+        safe_x_distance = min(
+            resized_image.size[0] * move_distance * move_speed, extra_width
+        )
+        safe_y_distance = min(
+            resized_image.size[1] * move_distance * move_speed, extra_height
+        )
+
+        # 计算入场效果的偏移量（用于初始位置计算）
+        entrance_x_offset = 0
+        entrance_y_offset = 0
+
+        if entrance_effect:
+            # 根据入场方向计算初始偏移量
+            if entrance_direction == "left":
+                entrance_x_offset = -resized_image.size[0]  # 从左侧外部进入
+                entrance_y_offset = 0
+            elif entrance_direction == "right":
+                entrance_x_offset = final_width  # 从右侧外部进入
+                entrance_y_offset = 0
+            elif entrance_direction == "up":
+                entrance_x_offset = 0
+                entrance_y_offset = -resized_image.size[1]  # 从上方外部进入
+            elif entrance_direction == "down":
+                entrance_x_offset = 0
+                entrance_y_offset = final_height  # 从下方外部进入
+
+        # 创建移动动画函数
+        def move_position(t):
+            # 处理入场效果
+            if entrance_effect and t < entrance_duration:
+                # 计算入场进度 (0到1之间)
+                entrance_progress = t / entrance_duration
+
+                # 计算正常移动的起始位置（不考虑入场效果）
+                normal_start_x = 0
+                normal_start_y = 0
+
+                if move_direction == "right":
+                    normal_start_x = -safe_x_distance
+                elif move_direction == "down":
+                    normal_start_y = -safe_y_distance
+
+                # 根据入场方向和进度计算当前位置
+                if entrance_direction == "left":
+                    # 从左侧进入到正常起始位置
+                    return (
+                        entrance_x_offset * (1 - entrance_progress)
+                        + normal_start_x * entrance_progress,
+                        normal_start_y,
+                    )
+                elif entrance_direction == "right":
+                    # 从右侧进入到正常起始位置
+                    return (
+                        entrance_x_offset * (1 - entrance_progress)
+                        + normal_start_x * entrance_progress,
+                        normal_start_y,
+                    )
+                elif entrance_direction == "up":
+                    # 从上方进入到正常起始位置
+                    return (
+                        normal_start_x,
+                        entrance_y_offset * (1 - entrance_progress)
+                        + normal_start_y * entrance_progress,
+                    )
+                elif entrance_direction == "down":
+                    # 从下方进入到正常起始位置
+                    return (
+                        normal_start_x,
+                        entrance_y_offset * (1 - entrance_progress)
+                        + normal_start_y * entrance_progress,
+                    )
+
+            # 入场效果后的正常移动
+            # 调整进度计算，考虑入场效果后的剩余时间
+            if entrance_effect:
+                remaining_time = audio_duration - entrance_duration
+                if remaining_time <= 0:
+                    # 如果入场时间等于或大于音频时长，则固定在起始位置
+                    adjusted_progress = 0
+                else:
+                    # 计算入场后的移动进度
+                    t_after_entrance = max(0, t - entrance_duration)
+                    adjusted_progress = min(
+                        1.0, (t_after_entrance / remaining_time) * move_speed
+                    )
+            else:
+                # 没有入场效果时的原始计算
+                adjusted_progress = min(1.0, (t / audio_duration) * move_speed)
+
+            # 根据移动方向返回相应的位置
+            if move_direction == "left":
+                return (-safe_x_distance * adjusted_progress, 0)
+            elif move_direction == "right":
+                return (-safe_x_distance * (1 - adjusted_progress), 0)
+            elif move_direction == "up":
+                return (0, -safe_y_distance * adjusted_progress)
+            elif move_direction == "down":
+                return (0, -safe_y_distance * (1 - adjusted_progress))
+            else:
+                # 默认为左移动
+                return (-safe_x_distance * adjusted_progress, 0)
+
+        # 应用移动效果到图片
+        moving_image = resized_image.set_position(move_position).set_duration(
+            audio_duration
+        )
+
+        # 合成视频和音频
+        final_clip = CompositeVideoClip(
+            [moving_image], size=(final_width, final_height)
+        )
+        final_clip = final_clip.set_audio(audio)
+
+        # 检查同名SRT字幕文件是否存在 - 使用audio_path而不是output_path
+        srt_path = os.path.splitext(audio_path)[0] + ".srt"
+        if os.path.exists(srt_path):
+            try:
+                # 解析SRT字幕文件
+                subtitles = parse_srt_file(srt_path)
+
+                if subtitles:
+                    # 创建字幕剪辑列表
+                    subtitle_clips = []
+
+                    # 计算字幕最大宽度（视频宽度的80%）
+                    max_subtitle_width = int(final_width * 0.8)
+
+                    # 查找中文字体
+                    font = find_chinese_font()
+                    if font is None:
+                        print("警告：无法找到支持中文的字体，将使用默认字体")
+                        font = ImageFont.load_default()
+
+                    # 使用PIL手动生成静态字幕图像
+                    for sub in subtitles:
+                        try:
+                            # 获取字幕时间和文本
+                            start_time = sub["start"]
+                            end_time = sub["end"]
+                            text = sub["text"]
+                            duration = end_time - start_time
+
+                            # 创建一个空白图像作为字幕背景
+                            img = Image.new(
+                                "RGBA", (final_width, final_height), (0, 0, 0, 0)
+                            )
+                            draw = ImageDraw.Draw(img)
+
+                            # 计算自适应字体大小
+                            font_size = calculate_adaptive_font_size(
+                                text, max_subtitle_width, font
+                            )
+
+                            # 处理文本换行
+                            lines = wrap_text(text, max_subtitle_width, font, font_size)
+
+                            # 计算文本总高度
+                            line_height = font_size * 1.5
+                            text_height = len(lines) * line_height
+
+                            # 计算起始y坐标（底部上方10%位置）
+                            y_position = (
+                                final_height - text_height - int(final_height * 0.1)
+                            )
+
+                            # 绘制字幕
+                            for line_idx, line in enumerate(lines):
+                                # 计算当前行的x坐标（居中）
+                                text_width = draw.textlength(
+                                    line, font=font.font_variant(size=font_size)
+                                )
+                                x_position = (final_width - text_width) // 2
+                                y = y_position + line_idx * line_height
+
+                                # 绘制描边
+                                for offset_x in [-2, -1, 0, 1, 2]:
+                                    for offset_y in [-2, -1, 0, 1, 2]:
+                                        if offset_x != 0 or offset_y != 0:
+                                            draw.text(
+                                                (x_position + offset_x, y + offset_y),
+                                                line,
+                                                font=font.font_variant(size=font_size),
+                                                fill=(0, 0, 0, 255),  # 黑色描边
+                                            )
+
+                                # 绘制黄色文本
+                                draw.text(
+                                    (x_position, y),
+                                    line,
+                                    font=font.font_variant(size=font_size),
+                                    fill=(255, 255, 0, 255),  # 黄色
+                                )
+
+                            # 将PIL图像转换为ImageClip
+                            img_array = np.array(img)
+                            subtitle_img_clip = ImageClip(img_array)
+
+                            # 设置字幕的持续时间和开始时间
+                            subtitle_img_clip = subtitle_img_clip.set_start(
+                                start_time
+                            ).set_duration(duration)
+
+                            # 添加到字幕剪辑列表
+                            subtitle_clips.append(subtitle_img_clip)
+
+                        except Exception as e:
+                            print(f"处理单个字幕时出错: {e}")
+                            import traceback
+
+                            traceback.print_exc()
+                            continue
+
+                    # 将所有字幕添加到视频中
+                    if subtitle_clips:
+                        # 合成所有剪辑
+                        all_clips = [final_clip] + subtitle_clips
+                        final_clip = CompositeVideoClip(all_clips)
+
+            except Exception as e:
+                print(f"添加字幕时出错: {e}")
+                import traceback
+
+                traceback.print_exc()
+
+        # 写入输出文件
+        final_clip.write_videofile(
+            output_path, fps=24, codec="libx264", verbose=False, logger=None
+        )
+
+        # 关闭所有剪辑释放资源
+        if audio != original_audio:
+            audio.close()
+        original_audio.close()
+        image_clip.close()
+        resized_image.close()
+        final_clip.close()
+
+        # 处理成功返回True
+        return True
+
+    except Exception as e:
+        # 捕获所有异常，打印错误信息并返回False
+        print(f"视频生成失败，错误: {e}")
+        import traceback
+
+        traceback.print_exc()
+        return False
+
+
+# 查找支持中文的字体
+def find_chinese_font():
+    """
+    在系统中查找支持中文的字体
+
+    返回:
+        PIL.ImageFont: 找到的字体对象，如果未找到则返回None
+    """
+    from PIL import ImageFont
+    import os
+    import platform
+
+    # 更多中文字体名称
+    system = platform.system()
+
+    if system == "Windows":
+        # Windows系统的字体目录
+        font_dirs = ["C:/Windows/Fonts/"]
+        chinese_font_names = [
+            "msyh.ttc",  # 微软雅黑
+            "simhei.ttf",  # 黑体
+            "simsun.ttc",  # 宋体
+            "simkai.ttf",  # 楷体
+            "STKAITI.TTF",  # 华文楷体
+            "STFANGSO.TTF",  # 华文仿宋
+            "STXIHEI.TTF",  # 华文细黑
+            "STZHONGS.TTF",  # 华文中宋
+            "msyhbd.ttf",  # 微软雅黑粗体
+            "simfang.ttf",  # 仿宋
+            "simyou.ttf",  # 幼圆
+            "SIMLI.TTF",  # 隶书
+            "STLITI.TTF",  # 华文隶书
+            "FZSTK.TTF",  # 方正书体
+            "FZYTK.TTF",  # 方正姚体
+            "STXINWEI.TTF",  # 华文新魏
+        ]
+    elif system == "Darwin":  # macOS
+        # macOS系统的字体目录
+        font_dirs = [
+            "/System/Library/Fonts/",
+            "/Library/Fonts/",
+            os.path.expanduser("~/Library/Fonts/"),
+        ]
+        chinese_font_names = [
+            "PingFang.ttc",  # 苹方
+            "STHeiti Light.ttc",  # 华文黑体
+            "STHeiti Medium.ttc",  # 华文黑体中
+            "Hiragino Sans GB.ttc",  # 冬青黑体
+            "Hei.ttf",  # 黑体
+            "Kai.ttf",  # 楷体
+            "AppleGothic.ttf",  # 苹果哥特体
+            "AppleMyungjo.ttf",  # 苹果明朝
+        ]
+    else:  # Linux
+        # Linux系统的字体目录
+        font_dirs = [
+            "/usr/share/fonts/",
+            "/usr/local/share/fonts/",
+            os.path.expanduser("~/.fonts/"),
+        ]
+        chinese_font_names = [
+            "wqy-microhei.ttc",  # 文泉驿微米黑
+            "wqy-zenhei.ttf",  # 文泉驿正黑
+            "NotoSansCJK-Regular.ttc",  # 思源黑体
+            "NotoSerifCJK-Regular.ttc",  # 思源宋体
+            "NotoSansSC-Regular.otf",  # 思源黑体简体中文
+            "NotoSerifSC-Regular.otf",  # 思源宋体简体中文
+            "droid-fallback.ttf",  # Droid备用字体
+            "DroidSansFallbackFull.ttf",  # Droid完整备用字体
+        ]
+
+    # 寻找所有可能的字体
+    font_size = 24  # 临时字体大小
+    for font_dir in font_dirs:
+        if os.path.exists(font_dir):
+            # 优先检查列表中的中文字体
+            for font_name in chinese_font_names:
+                font_path = os.path.join(font_dir, font_name)
+                if os.path.exists(font_path):
+                    try:
+                        font = ImageFont.truetype(font_path, font_size)
+                        return font
+                    except Exception:
+                        continue
+
+            # 如果列表中的字体都不可用，尝试遍历目录
+            try:
+                for file in os.listdir(font_dir):
+                    if file.endswith((".ttf", ".ttc", ".otf")):
+                        font_path = os.path.join(font_dir, file)
+                        try:
+                            font = ImageFont.truetype(font_path, font_size)
+                            return font
+                        except Exception:
+                            continue
+            except Exception:
+                continue
+
+    return None
+
+
+# 计算自适应字体大小
+def calculate_adaptive_font_size(text, max_width, font_base, min_size=24, max_size=72):
+    """
+    计算适应指定宽度的字体大小
+
+    参数:
+        text (str): 要渲染的文本
+        max_width (int): 最大宽度
+        font_base (PIL.ImageFont): 基础字体对象
+        min_size (int): 最小字体大小
+        max_size (int): 最大字体大小
+
+    返回:
+        int: 适合的字体大小
+    """
+    from PIL import ImageDraw
+
+    # 创建临时图像进行测量
+    temp_img = Image.new("RGBA", (1, 1), (0, 0, 0, 0))
+    temp_draw = ImageDraw.Draw(temp_img)
+
+    # 如果文本包含换行符，找出最长的一行
+    lines = text.split("\n")
+    if not lines:
+        return max_size
+
+    max_line = max(lines, key=len)
+
+    # 二分查找最佳字体大小
+    low, high = min_size, max_size
+    best_size = min_size
+
+    while low <= high:
+        mid = (low + high) // 2
+        font = font_base.font_variant(size=mid)
+
+        # 测量宽度
+        width = temp_draw.textlength(max_line, font=font)
+
+        if width <= max_width * 0.95:  # 留5%的余量
+            best_size = mid
+            low = mid + 1
+        else:
+            high = mid - 1
+
+    # 确保字体大小不会太大或太小
+    return max(min(best_size, max_size), min_size)
+
+
+# 文本换行处理
+def wrap_text(text, max_width, font_base, font_size):
+    """
+    根据最大宽度对文本进行换行处理
+
+    参数:
+        text (str): 要处理的文本
+        max_width (int): 最大宽度
+        font_base (PIL.ImageFont): 基础字体对象
+        font_size (int): 字体大小
+
+    返回:
+        list: 换行后的文本行列表
+    """
+    from PIL import ImageDraw
+
+    # 使用指定字体大小
+    font = font_base.font_variant(size=font_size)
+
+    # 创建临时图像进行测量
+    temp_img = Image.new("RGBA", (1, 1), (0, 0, 0, 0))
+    temp_draw = ImageDraw.Draw(temp_img)
+
+    # 如果文本已包含换行符，先按换行符分割
+    raw_lines = text.split("\n")
+    lines = []
+
+    for raw_line in raw_lines:
+        if not raw_line.strip():
+            lines.append("")
+            continue
+
+        # 测量当前行宽度
+        width = temp_draw.textlength(raw_line, font=font)
+
+        # 如果行宽度小于最大宽度，直接添加
+        if width <= max_width:
+            lines.append(raw_line)
+            continue
+
+        # 否则需要拆分行
+        # 判断是否是中文（没有空格）
+        words = raw_line.split()
+
+        # 如果分割后数量少（可能是中文），按字符拆分
+        if len(words) <= 1:
+            current_line = ""
+            for char in raw_line:
+                test_line = current_line + char
+                width = temp_draw.textlength(test_line, font=font)
+
+                if width <= max_width:
+                    current_line = test_line
+                else:
+                    lines.append(current_line)
+                    current_line = char
+
+            if current_line:
+                lines.append(current_line)
+        else:
+            # 英文单词处理
+            current_line = ""
+            for word in words:
+                test_line = current_line + " " + word if current_line else word
+                width = temp_draw.textlength(test_line, font=font)
+
+                if width <= max_width:
+                    current_line = test_line
+                else:
+                    lines.append(current_line)
+                    current_line = word
+
+            if current_line:
+                lines.append(current_line)
+
+    return lines
+
+
+# 解析SRT字幕文件的函数
+def parse_srt_file(srt_path):
+    """
+    解析SRT字幕文件，返回包含时间和文本的字幕列表
+
+    参数:
+        srt_path (str): SRT文件路径
+
+    返回:
+        list: 包含字幕信息的字典列表，每个字典包含'start'、'end'和'text'字段
+    """
+    subtitles = []
+
+    # 辅助函数：将SRT格式的时间转换为秒
+    def time_to_seconds(time_str):
+        # 格式: 00:00:00,000
+        hours, minutes, seconds = time_str.replace(",", ".").split(":")
+        return float(hours) * 3600 + float(minutes) * 60 + float(seconds)
+
+    try:
+        with open(srt_path, "r", encoding="utf-8") as file:
+            lines = file.readlines()
+
+        # 解析字幕文件
+        i = 0
+        while i < len(lines):
+            line = lines[i].strip()
+
+            # 跳过空行
+            if not line:
+                i += 1
+                continue
+
+            # 尝试解析字幕编号（数字）
+            try:
+                int(line)
+                # 如果是字幕编号，获取下一行的时间信息
+                i += 1
+                if i < len(lines):
+                    time_line = lines[i].strip()
+                    # 解析时间信息（格式: 00:00:00,000 --> 00:00:00,000）
+                    if "-->" in time_line:
+                        start_time, end_time = time_line.split("-->")
+                        start_seconds = time_to_seconds(start_time.strip())
+                        end_seconds = time_to_seconds(end_time.strip())
+
+                        # 收集字幕文本
+                        text_lines = []
+                        i += 1
+                        while i < len(lines) and lines[i].strip():
+                            text_lines.append(lines[i].strip())
+                            i += 1
+
+                        # 将多行文本合并为一行，保留换行符
+                        text = "\n".join(text_lines)
+
+                        # 添加到字幕列表
+                        subtitles.append(
+                            {"start": start_seconds, "end": end_seconds, "text": text}
+                        )
+                    else:
+                        i += 1
+                else:
+                    i += 1
+            except ValueError:
+                # 不是字幕编号，跳过
+                i += 1
+
+        return subtitles
+
+    except Exception as e:
+        print(f"解析SRT文件失败: {e}")
+        return []
+
+
+# 更新JSON文件中的数据
+def update_json_with_video_path(chapter_file_path, item_id, video_path):
+    # 获取或创建该文件的锁
+    if chapter_file_path not in json_locks:
+        json_locks[chapter_file_path] = threading.Lock()
+
+    # 使用锁确保线程安全
+    with json_locks[chapter_file_path]:
+        try:
+            # 读取JSON文件
+            with open(chapter_file_path, "r", encoding="utf-8") as f:
+                chapter_data = json.load(f)
+
+            # 查找对应的项并更新
+            for item in chapter_data:
+                if item["id"] == item_id:
+                    item["video_path"] = video_path
+                    break
+
+            # 写回JSON文件
+            with open(chapter_file_path, "w", encoding="utf-8") as f:
+                json.dump(chapter_data, f, ensure_ascii=False, indent=4)
+
+            return True
+        except Exception as e:
+            logger.error(f"更新JSON文件失败：{str(e)}")
+            return False
+
+
+# 处理单个条目
+def process_item(item, book_id, chapter_file_path, pbar):
+    item_id = item["id"]
+    text = item["text"]
+    # 构建保存路径
+    chapter_name = os.path.basename(chapter_file_path).split(".")[0]
+    video_dir = f"data/book/{book_id}/video/{chapter_name}"
+    video_path = f"data/book/{book_id}/video/{chapter_name}/{item_id}.mp4"
+    image_path = f"data/book/{book_id}/images/{chapter_name}/{item_id}.jpg"
+    audio_path = f"data/book/{book_id}/audio/{chapter_name}/{item_id}.mp3"
+    # 确保目录存在
+    os.makedirs(video_dir, exist_ok=True)
+    # 检查文件是否已存在
+    if os.path.exists(video_path):
+        # 检查JSON是否已更新过
+        if "video_path" not in item:
+            # 文件存在但JSON未更新，更新JSON
+            relative_video_path = f"video/{chapter_name}/{item_id}.mp4"
+            update_json_with_video_path(chapter_file_path, item_id, relative_video_path)
+        pbar.update(1)  # 更新进度条
+        return True
+
+    # 生成视频
+    video_data = create_video_with_moving_image(
+        image_path,
+        audio_path,
+        video_path,
+        move_direction=random.choice(["left", "up", "down", "right"]),
+        portrait_mode=os.getenv("PORTRAIT_MODE"),
+        video_width=int(os.getenv("VIDEO_WIDTH")) or 750,
+        video_height=int(os.getenv("VIDEO_HEIGHT")) or 1280,
+        move_distance=float(os.getenv("MOVE_DISTANCE")) or 0.1,
+        move_speed=float(os.getenv("MOVE_SPEED")) or 1.0,
+        entrance_effect=os.getenv("ENTRANCE_EFFECT"),
+        entrance_duration=float(os.getenv("ENTRANCE_DURATION")),
+        audio_speed=float(os.getenv("AUDIO_SPEED")) or 1.0,
+    )
+
+    # 检查是否生成成功
+    if video_data is None:
+        logger.error(f"处理项目 {chapter_name}/{item_id} 失败，跳过")
+        pbar.update(1)  # 更新进度条
+        return False
+
+    try:
+        # 更新JSON文件，添加audio_path字段
+        relative_video_path = f"/data/book/{book_id}/video/{chapter_name}/{item_id}.mp4"
+        update_json_with_video_path(chapter_file_path, item_id, relative_video_path)
+    except Exception as e:
+        logger.error(f"保存视频文件失败：{str(e)}")
+        pbar.update(1)
+        return False
+
+    pbar.update(1)  # 更新进度条
+    return True
+
+
+def create_book_video(book_id):
+    # 从环境变量获取线程数
+    try:
+        num_threads = int(os.getenv("VIDEO_THREADS", "1"))
+    except ValueError:
+        num_threads = 1  # 默认使用1个线程
+
+    # 获取 data/book/{book_id}/storyboard 目录下的所有json
+    storyboard_dir = f"data/book/{book_id}/storyboard"
+    if not os.path.exists(storyboard_dir):
+        logger.error(f"小说信息不存在{storyboard_dir}")
+        return
+    try:
+        chapter_files = os.listdir(storyboard_dir)
+        chapter_files.sort(key=lambda x: int(x.split(".")[0]))
+        chapter_file_paths = [os.path.join(storyboard_dir, f) for f in chapter_files]
+    except Exception as e:
+        logger.error(f"读取章节文件失败：{str(e)}")
+        return
+    # 计算总进度
+    total_items = 0
+    try:
+        for chapter_file_path in chapter_file_paths:
+            with open(chapter_file_path, "r", encoding="utf-8") as f:
+                chapter_data = json.load(f)
+                total_items += len(chapter_data)
+    except Exception as e:
+        logger.error(f"计算总进度失败：{str(e)}")
+        return
+    # 创建总进度条
+    with tqdm(total=total_items, desc="总进度", unit="图") as pbar:
+        # 使用线程池
+        with concurrent.futures.ThreadPoolExecutor(max_workers=num_threads) as executor:
+            # 遍历每个章节文件
+            for chapter_file_path in chapter_file_paths:
+                try:
+                    # 读取章节数据
+                    with open(chapter_file_path, "r", encoding="utf-8") as f:
+                        chapter_data = json.load(f)
+
+                    # 提交任务到线程池
+                    futures = []
+                    for item in chapter_data:
+                        future = executor.submit(
+                            process_item, item, book_id, chapter_file_path, pbar
+                        )
+                        futures.append(future)
+
+                    # 等待所有任务完成
+                    concurrent.futures.wait(futures)
+                except Exception as e:
+                    logger.error(f"处理章节 {chapter_file_path} 失败：{str(e)}")
+
+
+if __name__ == "__main__":
+    create_book_video("1043294775")
+</file>
+
+<file path="models/realesr-animevideov3-x2.param">
+7767517
+41 42
+Input                    input.1                  0 1 data
+Split                    splitncnn_input0         1 2 data input.1_splitncnn_0 input.1_splitncnn_1
+Convolution              Conv_0                   1 1 input.1_splitncnn_1 54 0=64 1=3 4=1 5=1 6=1728
+PReLU                    PRelu_1                  1 1 54 56 0=64
+Convolution              Conv_2                   1 1 56 57 0=64 1=3 4=1 5=1 6=36864
+PReLU                    PRelu_3                  1 1 57 59 0=64
+Convolution              Conv_4                   1 1 59 60 0=64 1=3 4=1 5=1 6=36864
+PReLU                    PRelu_5                  1 1 60 62 0=64
+Convolution              Conv_6                   1 1 62 63 0=64 1=3 4=1 5=1 6=36864
+PReLU                    PRelu_7                  1 1 63 65 0=64
+Convolution              Conv_8                   1 1 65 66 0=64 1=3 4=1 5=1 6=36864
+PReLU                    PRelu_9                  1 1 66 68 0=64
+Convolution              Conv_10                  1 1 68 69 0=64 1=3 4=1 5=1 6=36864
+PReLU                    PRelu_11                 1 1 69 71 0=64
+Convolution              Conv_12                  1 1 71 72 0=64 1=3 4=1 5=1 6=36864
+PReLU                    PRelu_13                 1 1 72 74 0=64
+Convolution              Conv_14                  1 1 74 75 0=64 1=3 4=1 5=1 6=36864
+PReLU                    PRelu_15                 1 1 75 77 0=64
+Convolution              Conv_16                  1 1 77 78 0=64 1=3 4=1 5=1 6=36864
+PReLU                    PRelu_17                 1 1 78 80 0=64
+Convolution              Conv_18                  1 1 80 81 0=64 1=3 4=1 5=1 6=36864
+PReLU                    PRelu_19                 1 1 81 83 0=64
+Convolution              Conv_20                  1 1 83 84 0=64 1=3 4=1 5=1 6=36864
+PReLU                    PRelu_21                 1 1 84 86 0=64
+Convolution              Conv_22                  1 1 86 87 0=64 1=3 4=1 5=1 6=36864
+PReLU                    PRelu_23                 1 1 87 89 0=64
+Convolution              Conv_24                  1 1 89 90 0=64 1=3 4=1 5=1 6=36864
+PReLU                    PRelu_25                 1 1 90 92 0=64
+Convolution              Conv_26                  1 1 92 93 0=64 1=3 4=1 5=1 6=36864
+PReLU                    PRelu_27                 1 1 93 95 0=64
+Convolution              Conv_28                  1 1 95 96 0=64 1=3 4=1 5=1 6=36864
+PReLU                    PRelu_29                 1 1 96 98 0=64
+Convolution              Conv_30                  1 1 98 99 0=64 1=3 4=1 5=1 6=36864
+PReLU                    PRelu_31                 1 1 99 101 0=64
+Convolution              Conv_32                  1 1 101 102 0=64 1=3 4=1 5=1 6=36864
+PReLU                    PRelu_33                 1 1 102 104 0=64
+Convolution              Conv_34                  1 1 104 105 0=48 1=3 4=1 5=1 6=27648
+PixelShuffle             DepthToSpace_35          1 1 105 106 0=4
+Interp                   Resize_37                1 1 input.1_splitncnn_0 111 0=1 1=4.000000e+00 2=4.000000e+00
+BinaryOp                 Add_38                   2 1 106 111 112
+Interp                   Resize_40                1 1 112 output 0=3 1=5.000000e-01 2=5.000000e-01
+</file>
+
+<file path="models/realesr-animevideov3-x3.param">
+7767517
+41 42
+Input                    input.1                  0 1 data
+Split                    splitncnn_input0         1 2 data input.1_splitncnn_0 input.1_splitncnn_1
+Convolution              Conv_0                   1 1 input.1_splitncnn_1 54 0=64 1=3 4=1 5=1 6=1728
+PReLU                    PRelu_1                  1 1 54 56 0=64
+Convolution              Conv_2                   1 1 56 57 0=64 1=3 4=1 5=1 6=36864
+PReLU                    PRelu_3                  1 1 57 59 0=64
+Convolution              Conv_4                   1 1 59 60 0=64 1=3 4=1 5=1 6=36864
+PReLU                    PRelu_5                  1 1 60 62 0=64
+Convolution              Conv_6                   1 1 62 63 0=64 1=3 4=1 5=1 6=36864
+PReLU                    PRelu_7                  1 1 63 65 0=64
+Convolution              Conv_8                   1 1 65 66 0=64 1=3 4=1 5=1 6=36864
+PReLU                    PRelu_9                  1 1 66 68 0=64
+Convolution              Conv_10                  1 1 68 69 0=64 1=3 4=1 5=1 6=36864
+PReLU                    PRelu_11                 1 1 69 71 0=64
+Convolution              Conv_12                  1 1 71 72 0=64 1=3 4=1 5=1 6=36864
+PReLU                    PRelu_13                 1 1 72 74 0=64
+Convolution              Conv_14                  1 1 74 75 0=64 1=3 4=1 5=1 6=36864
+PReLU                    PRelu_15                 1 1 75 77 0=64
+Convolution              Conv_16                  1 1 77 78 0=64 1=3 4=1 5=1 6=36864
+PReLU                    PRelu_17                 1 1 78 80 0=64
+Convolution              Conv_18                  1 1 80 81 0=64 1=3 4=1 5=1 6=36864
+PReLU                    PRelu_19                 1 1 81 83 0=64
+Convolution              Conv_20                  1 1 83 84 0=64 1=3 4=1 5=1 6=36864
+PReLU                    PRelu_21                 1 1 84 86 0=64
+Convolution              Conv_22                  1 1 86 87 0=64 1=3 4=1 5=1 6=36864
+PReLU                    PRelu_23                 1 1 87 89 0=64
+Convolution              Conv_24                  1 1 89 90 0=64 1=3 4=1 5=1 6=36864
+PReLU                    PRelu_25                 1 1 90 92 0=64
+Convolution              Conv_26                  1 1 92 93 0=64 1=3 4=1 5=1 6=36864
+PReLU                    PRelu_27                 1 1 93 95 0=64
+Convolution              Conv_28                  1 1 95 96 0=64 1=3 4=1 5=1 6=36864
+PReLU                    PRelu_29                 1 1 96 98 0=64
+Convolution              Conv_30                  1 1 98 99 0=64 1=3 4=1 5=1 6=36864
+PReLU                    PRelu_31                 1 1 99 101 0=64
+Convolution              Conv_32                  1 1 101 102 0=64 1=3 4=1 5=1 6=36864
+PReLU                    PRelu_33                 1 1 102 104 0=64
+Convolution              Conv_34                  1 1 104 105 0=48 1=3 4=1 5=1 6=27648
+PixelShuffle             DepthToSpace_35          1 1 105 106 0=4
+Interp                   Resize_37                1 1 input.1_splitncnn_0 111 0=1 1=4.000000e+00 2=4.000000e+00
+BinaryOp                 Add_38                   2 1 106 111 112
+Interp                   Resize_40                1 1 112 output 0=3 1=7.500000e-01 2=7.500000e-01
+</file>
+
+<file path="models/realesr-animevideov3-x4.param">
+7767517
+40 41
+Input                    input.1                  0 1 data
+Split                    splitncnn_input0         1 2 data input.1_splitncnn_0 input.1_splitncnn_1
+Convolution              Conv_0                   1 1 input.1_splitncnn_1 54 0=64 1=3 4=1 5=1 6=1728
+PReLU                    PRelu_1                  1 1 54 56 0=64
+Convolution              Conv_2                   1 1 56 57 0=64 1=3 4=1 5=1 6=36864
+PReLU                    PRelu_3                  1 1 57 59 0=64
+Convolution              Conv_4                   1 1 59 60 0=64 1=3 4=1 5=1 6=36864
+PReLU                    PRelu_5                  1 1 60 62 0=64
+Convolution              Conv_6                   1 1 62 63 0=64 1=3 4=1 5=1 6=36864
+PReLU                    PRelu_7                  1 1 63 65 0=64
+Convolution              Conv_8                   1 1 65 66 0=64 1=3 4=1 5=1 6=36864
+PReLU                    PRelu_9                  1 1 66 68 0=64
+Convolution              Conv_10                  1 1 68 69 0=64 1=3 4=1 5=1 6=36864
+PReLU                    PRelu_11                 1 1 69 71 0=64
+Convolution              Conv_12                  1 1 71 72 0=64 1=3 4=1 5=1 6=36864
+PReLU                    PRelu_13                 1 1 72 74 0=64
+Convolution              Conv_14                  1 1 74 75 0=64 1=3 4=1 5=1 6=36864
+PReLU                    PRelu_15                 1 1 75 77 0=64
+Convolution              Conv_16                  1 1 77 78 0=64 1=3 4=1 5=1 6=36864
+PReLU                    PRelu_17                 1 1 78 80 0=64
+Convolution              Conv_18                  1 1 80 81 0=64 1=3 4=1 5=1 6=36864
+PReLU                    PRelu_19                 1 1 81 83 0=64
+Convolution              Conv_20                  1 1 83 84 0=64 1=3 4=1 5=1 6=36864
+PReLU                    PRelu_21                 1 1 84 86 0=64
+Convolution              Conv_22                  1 1 86 87 0=64 1=3 4=1 5=1 6=36864
+PReLU                    PRelu_23                 1 1 87 89 0=64
+Convolution              Conv_24                  1 1 89 90 0=64 1=3 4=1 5=1 6=36864
+PReLU                    PRelu_25                 1 1 90 92 0=64
+Convolution              Conv_26                  1 1 92 93 0=64 1=3 4=1 5=1 6=36864
+PReLU                    PRelu_27                 1 1 93 95 0=64
+Convolution              Conv_28                  1 1 95 96 0=64 1=3 4=1 5=1 6=36864
+PReLU                    PRelu_29                 1 1 96 98 0=64
+Convolution              Conv_30                  1 1 98 99 0=64 1=3 4=1 5=1 6=36864
+PReLU                    PRelu_31                 1 1 99 101 0=64
+Convolution              Conv_32                  1 1 101 102 0=64 1=3 4=1 5=1 6=36864
+PReLU                    PRelu_33                 1 1 102 104 0=64
+Convolution              Conv_34                  1 1 104 105 0=48 1=3 4=1 5=1 6=27648
+PixelShuffle             DepthToSpace_35          1 1 105 106 0=4
+Interp                   Resize_37                1 1 input.1_splitncnn_0 111 0=1 1=4.000000e+00 2=4.000000e+00
+BinaryOp                 Add_38                   2 1 106 111 output
+</file>
+
+<file path=".env.example">
+COOKIE=
+
+# 大模型配置
+AL_API_KEY=
+AL_API_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+
+# Gemini API Key
+GEMINI_API_KEY=
+GEMINI_API_URL=https://generativelanguage.googleapis.com/v1beta/openai/
+
+# 文生图配置
+SD_API_URL=http://127.0.0.1:7860/sdapi/v1/txt2img
+SD_LORA = , style outfits <lora:国风插画SDXL:1 >,hanfu,tang
+SD_STEPS = 20
+
+# 高清修复配置
+UPSCAYL_SCALE = 4
+UPSCAYL_MODEL = realesr-animevideov3-x4
+UPSCALY_FILE_TYPE = jpg
+
+# 音频配置
+AUDIO_API_KEY=
+AUDIO_API_URL=https://api.siliconflow.cn/v1/audio/speech
+AUDIO_MODEL=FunAudioLLM/CosyVoice2-0.5B
+AUDIO_THREADS=8         # 音频生成最大线程数
+
+# 分段视频生成配置
+VIDEO_THREADS=4         # 视频生成线程数
+PORTRAIT_MODE=True      # 是否是竖屏模式
+VIDEO_WIDTH=750         # 视频宽度
+VIDEO_HEIGHT=1280       # 视频高度
+MOVE_DISTANCE=0.1       # 移动距离 倍率
+MOVE_SPEED=1.0          # 移动速度
+ENTRANCE_EFFECT=True    # 入场效果
+ENTRANCE_DURATION=0.2   # 入场持续时间
+AUDIO_SPEED=1.0         # 音频速度 (效果不好)
+</file>
+
+<file path=".gitignore">
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+data/book/
+
+.mp4
+.env
+</file>
+
+<file path=".python-version">
+3.12
+</file>
+
+<file path="LICENSE">
+GNU GENERAL PUBLIC LICENSE
+                       Version 3, 29 June 2007
+
+ Copyright (C) 2007 Free Software Foundation, Inc. <https://fsf.org/>
+ Everyone is permitted to copy and distribute verbatim copies
+ of this license document, but changing it is not allowed.
+
+                            Preamble
+
+  The GNU General Public License is a free, copyleft license for
+software and other kinds of works.
+
+  The licenses for most software and other practical works are designed
+to take away your freedom to share and change the works.  By contrast,
+the GNU General Public License is intended to guarantee your freedom to
+share and change all versions of a program--to make sure it remains free
+software for all its users.  We, the Free Software Foundation, use the
+GNU General Public License for most of our software; it applies also to
+any other work released this way by its authors.  You can apply it to
+your programs, too.
+
+  When we speak of free software, we are referring to freedom, not
+price.  Our General Public Licenses are designed to make sure that you
+have the freedom to distribute copies of free software (and charge for
+them if you wish), that you receive source code or can get it if you
+want it, that you can change the software or use pieces of it in new
+free programs, and that you know you can do these things.
+
+  To protect your rights, we need to prevent others from denying you
+these rights or asking you to surrender the rights.  Therefore, you have
+certain responsibilities if you distribute copies of the software, or if
+you modify it: responsibilities to respect the freedom of others.
+
+  For example, if you distribute copies of such a program, whether
+gratis or for a fee, you must pass on to the recipients the same
+freedoms that you received.  You must make sure that they, too, receive
+or can get the source code.  And you must show them these terms so they
+know their rights.
+
+  Developers that use the GNU GPL protect your rights with two steps:
+(1) assert copyright on the software, and (2) offer you this License
+giving you legal permission to copy, distribute and/or modify it.
+
+  For the developers' and authors' protection, the GPL clearly explains
+that there is no warranty for this free software.  For both users' and
+authors' sake, the GPL requires that modified versions be marked as
+changed, so that their problems will not be attributed erroneously to
+authors of previous versions.
+
+  Some devices are designed to deny users access to install or run
+modified versions of the software inside them, although the manufacturer
+can do so.  This is fundamentally incompatible with the aim of
+protecting users' freedom to change the software.  The systematic
+pattern of such abuse occurs in the area of products for individuals to
+use, which is precisely where it is most unacceptable.  Therefore, we
+have designed this version of the GPL to prohibit the practice for those
+products.  If such problems arise substantially in other domains, we
+stand ready to extend this provision to those domains in future versions
+of the GPL, as needed to protect the freedom of users.
+
+  Finally, every program is threatened constantly by software patents.
+States should not allow patents to restrict development and use of
+software on general-purpose computers, but in those that do, we wish to
+avoid the special danger that patents applied to a free program could
+make it effectively proprietary.  To prevent this, the GPL assures that
+patents cannot be used to render the program non-free.
+
+  The precise terms and conditions for copying, distribution and
+modification follow.
+
+                       TERMS AND CONDITIONS
+
+  0. Definitions.
+
+  "This License" refers to version 3 of the GNU General Public License.
+
+  "Copyright" also means copyright-like laws that apply to other kinds of
+works, such as semiconductor masks.
+
+  "The Program" refers to any copyrightable work licensed under this
+License.  Each licensee is addressed as "you".  "Licensees" and
+"recipients" may be individuals or organizations.
+
+  To "modify" a work means to copy from or adapt all or part of the work
+in a fashion requiring copyright permission, other than the making of an
+exact copy.  The resulting work is called a "modified version" of the
+earlier work or a work "based on" the earlier work.
+
+  A "covered work" means either the unmodified Program or a work based
+on the Program.
+
+  To "propagate" a work means to do anything with it that, without
+permission, would make you directly or secondarily liable for
+infringement under applicable copyright law, except executing it on a
+computer or modifying a private copy.  Propagation includes copying,
+distribution (with or without modification), making available to the
+public, and in some countries other activities as well.
+
+  To "convey" a work means any kind of propagation that enables other
+parties to make or receive copies.  Mere interaction with a user through
+a computer network, with no transfer of a copy, is not conveying.
+
+  An interactive user interface displays "Appropriate Legal Notices"
+to the extent that it includes a convenient and prominently visible
+feature that (1) displays an appropriate copyright notice, and (2)
+tells the user that there is no warranty for the work (except to the
+extent that warranties are provided), that licensees may convey the
+work under this License, and how to view a copy of this License.  If
+the interface presents a list of user commands or options, such as a
+menu, a prominent item in the list meets this criterion.
+
+  1. Source Code.
+
+  The "source code" for a work means the preferred form of the work
+for making modifications to it.  "Object code" means any non-source
+form of a work.
+
+  A "Standard Interface" means an interface that either is an official
+standard defined by a recognized standards body, or, in the case of
+interfaces specified for a particular programming language, one that
+is widely used among developers working in that language.
+
+  The "System Libraries" of an executable work include anything, other
+than the work as a whole, that (a) is included in the normal form of
+packaging a Major Component, but which is not part of that Major
+Component, and (b) serves only to enable use of the work with that
+Major Component, or to implement a Standard Interface for which an
+implementation is available to the public in source code form.  A
+"Major Component", in this context, means a major essential component
+(kernel, window system, and so on) of the specific operating system
+(if any) on which the executable work runs, or a compiler used to
+produce the work, or an object code interpreter used to run it.
+
+  The "Corresponding Source" for a work in object code form means all
+the source code needed to generate, install, and (for an executable
+work) run the object code and to modify the work, including scripts to
+control those activities.  However, it does not include the work's
+System Libraries, or general-purpose tools or generally available free
+programs which are used unmodified in performing those activities but
+which are not part of the work.  For example, Corresponding Source
+includes interface definition files associated with source files for
+the work, and the source code for shared libraries and dynamically
+linked subprograms that the work is specifically designed to require,
+such as by intimate data communication or control flow between those
+subprograms and other parts of the work.
+
+  The Corresponding Source need not include anything that users
+can regenerate automatically from other parts of the Corresponding
+Source.
+
+  The Corresponding Source for a work in source code form is that
+same work.
+
+  2. Basic Permissions.
+
+  All rights granted under this License are granted for the term of
+copyright on the Program, and are irrevocable provided the stated
+conditions are met.  This License explicitly affirms your unlimited
+permission to run the unmodified Program.  The output from running a
+covered work is covered by this License only if the output, given its
+content, constitutes a covered work.  This License acknowledges your
+rights of fair use or other equivalent, as provided by copyright law.
+
+  You may make, run and propagate covered works that you do not
+convey, without conditions so long as your license otherwise remains
+in force.  You may convey covered works to others for the sole purpose
+of having them make modifications exclusively for you, or provide you
+with facilities for running those works, provided that you comply with
+the terms of this License in conveying all material for which you do
+not control copyright.  Those thus making or running the covered works
+for you must do so exclusively on your behalf, under your direction
+and control, on terms that prohibit them from making any copies of
+your copyrighted material outside their relationship with you.
+
+  Conveying under any other circumstances is permitted solely under
+the conditions stated below.  Sublicensing is not allowed; section 10
+makes it unnecessary.
+
+  3. Protecting Users' Legal Rights From Anti-Circumvention Law.
+
+  No covered work shall be deemed part of an effective technological
+measure under any applicable law fulfilling obligations under article
+11 of the WIPO copyright treaty adopted on 20 December 1996, or
+similar laws prohibiting or restricting circumvention of such
+measures.
+
+  When you convey a covered work, you waive any legal power to forbid
+circumvention of technological measures to the extent such circumvention
+is effected by exercising rights under this License with respect to
+the covered work, and you disclaim any intention to limit operation or
+modification of the work as a means of enforcing, against the work's
+users, your or third parties' legal rights to forbid circumvention of
+technological measures.
+
+  4. Conveying Verbatim Copies.
+
+  You may convey verbatim copies of the Program's source code as you
+receive it, in any medium, provided that you conspicuously and
+appropriately publish on each copy an appropriate copyright notice;
+keep intact all notices stating that this License and any
+non-permissive terms added in accord with section 7 apply to the code;
+keep intact all notices of the absence of any warranty; and give all
+recipients a copy of this License along with the Program.
+
+  You may charge any price or no price for each copy that you convey,
+and you may offer support or warranty protection for a fee.
+
+  5. Conveying Modified Source Versions.
+
+  You may convey a work based on the Program, or the modifications to
+produce it from the Program, in the form of source code under the
+terms of section 4, provided that you also meet all of these conditions:
+
+    a) The work must carry prominent notices stating that you modified
+    it, and giving a relevant date.
+
+    b) The work must carry prominent notices stating that it is
+    released under this License and any conditions added under section
+    7.  This requirement modifies the requirement in section 4 to
+    "keep intact all notices".
+
+    c) You must license the entire work, as a whole, under this
+    License to anyone who comes into possession of a copy.  This
+    License will therefore apply, along with any applicable section 7
+    additional terms, to the whole of the work, and all its parts,
+    regardless of how they are packaged.  This License gives no
+    permission to license the work in any other way, but it does not
+    invalidate such permission if you have separately received it.
+
+    d) If the work has interactive user interfaces, each must display
+    Appropriate Legal Notices; however, if the Program has interactive
+    interfaces that do not display Appropriate Legal Notices, your
+    work need not make them do so.
+
+  A compilation of a covered work with other separate and independent
+works, which are not by their nature extensions of the covered work,
+and which are not combined with it such as to form a larger program,
+in or on a volume of a storage or distribution medium, is called an
+"aggregate" if the compilation and its resulting copyright are not
+used to limit the access or legal rights of the compilation's users
+beyond what the individual works permit.  Inclusion of a covered work
+in an aggregate does not cause this License to apply to the other
+parts of the aggregate.
+
+  6. Conveying Non-Source Forms.
+
+  You may convey a covered work in object code form under the terms
+of sections 4 and 5, provided that you also convey the
+machine-readable Corresponding Source under the terms of this License,
+in one of these ways:
+
+    a) Convey the object code in, or embodied in, a physical product
+    (including a physical distribution medium), accompanied by the
+    Corresponding Source fixed on a durable physical medium
+    customarily used for software interchange.
+
+    b) Convey the object code in, or embodied in, a physical product
+    (including a physical distribution medium), accompanied by a
+    written offer, valid for at least three years and valid for as
+    long as you offer spare parts or customer support for that product
+    model, to give anyone who possesses the object code either (1) a
+    copy of the Corresponding Source for all the software in the
+    product that is covered by this License, on a durable physical
+    medium customarily used for software interchange, for a price no
+    more than your reasonable cost of physically performing this
+    conveying of source, or (2) access to copy the
+    Corresponding Source from a network server at no charge.
+
+    c) Convey individual copies of the object code with a copy of the
+    written offer to provide the Corresponding Source.  This
+    alternative is allowed only occasionally and noncommercially, and
+    only if you received the object code with such an offer, in accord
+    with subsection 6b.
+
+    d) Convey the object code by offering access from a designated
+    place (gratis or for a charge), and offer equivalent access to the
+    Corresponding Source in the same way through the same place at no
+    further charge.  You need not require recipients to copy the
+    Corresponding Source along with the object code.  If the place to
+    copy the object code is a network server, the Corresponding Source
+    may be on a different server (operated by you or a third party)
+    that supports equivalent copying facilities, provided you maintain
+    clear directions next to the object code saying where to find the
+    Corresponding Source.  Regardless of what server hosts the
+    Corresponding Source, you remain obligated to ensure that it is
+    available for as long as needed to satisfy these requirements.
+
+    e) Convey the object code using peer-to-peer transmission, provided
+    you inform other peers where the object code and Corresponding
+    Source of the work are being offered to the general public at no
+    charge under subsection 6d.
+
+  A separable portion of the object code, whose source code is excluded
+from the Corresponding Source as a System Library, need not be
+included in conveying the object code work.
+
+  A "User Product" is either (1) a "consumer product", which means any
+tangible personal property which is normally used for personal, family,
+or household purposes, or (2) anything designed or sold for incorporation
+into a dwelling.  In determining whether a product is a consumer product,
+doubtful cases shall be resolved in favor of coverage.  For a particular
+product received by a particular user, "normally used" refers to a
+typical or common use of that class of product, regardless of the status
+of the particular user or of the way in which the particular user
+actually uses, or expects or is expected to use, the product.  A product
+is a consumer product regardless of whether the product has substantial
+commercial, industrial or non-consumer uses, unless such uses represent
+the only significant mode of use of the product.
+
+  "Installation Information" for a User Product means any methods,
+procedures, authorization keys, or other information required to install
+and execute modified versions of a covered work in that User Product from
+a modified version of its Corresponding Source.  The information must
+suffice to ensure that the continued functioning of the modified object
+code is in no case prevented or interfered with solely because
+modification has been made.
+
+  If you convey an object code work under this section in, or with, or
+specifically for use in, a User Product, and the conveying occurs as
+part of a transaction in which the right of possession and use of the
+User Product is transferred to the recipient in perpetuity or for a
+fixed term (regardless of how the transaction is characterized), the
+Corresponding Source conveyed under this section must be accompanied
+by the Installation Information.  But this requirement does not apply
+if neither you nor any third party retains the ability to install
+modified object code on the User Product (for example, the work has
+been installed in ROM).
+
+  The requirement to provide Installation Information does not include a
+requirement to continue to provide support service, warranty, or updates
+for a work that has been modified or installed by the recipient, or for
+the User Product in which it has been modified or installed.  Access to a
+network may be denied when the modification itself materially and
+adversely affects the operation of the network or violates the rules and
+protocols for communication across the network.
+
+  Corresponding Source conveyed, and Installation Information provided,
+in accord with this section must be in a format that is publicly
+documented (and with an implementation available to the public in
+source code form), and must require no special password or key for
+unpacking, reading or copying.
+
+  7. Additional Terms.
+
+  "Additional permissions" are terms that supplement the terms of this
+License by making exceptions from one or more of its conditions.
+Additional permissions that are applicable to the entire Program shall
+be treated as though they were included in this License, to the extent
+that they are valid under applicable law.  If additional permissions
+apply only to part of the Program, that part may be used separately
+under those permissions, but the entire Program remains governed by
+this License without regard to the additional permissions.
+
+  When you convey a copy of a covered work, you may at your option
+remove any additional permissions from that copy, or from any part of
+it.  (Additional permissions may be written to require their own
+removal in certain cases when you modify the work.)  You may place
+additional permissions on material, added by you to a covered work,
+for which you have or can give appropriate copyright permission.
+
+  Notwithstanding any other provision of this License, for material you
+add to a covered work, you may (if authorized by the copyright holders of
+that material) supplement the terms of this License with terms:
+
+    a) Disclaiming warranty or limiting liability differently from the
+    terms of sections 15 and 16 of this License; or
+
+    b) Requiring preservation of specified reasonable legal notices or
+    author attributions in that material or in the Appropriate Legal
+    Notices displayed by works containing it; or
+
+    c) Prohibiting misrepresentation of the origin of that material, or
+    requiring that modified versions of such material be marked in
+    reasonable ways as different from the original version; or
+
+    d) Limiting the use for publicity purposes of names of licensors or
+    authors of the material; or
+
+    e) Declining to grant rights under trademark law for use of some
+    trade names, trademarks, or service marks; or
+
+    f) Requiring indemnification of licensors and authors of that
+    material by anyone who conveys the material (or modified versions of
+    it) with contractual assumptions of liability to the recipient, for
+    any liability that these contractual assumptions directly impose on
+    those licensors and authors.
+
+  All other non-permissive additional terms are considered "further
+restrictions" within the meaning of section 10.  If the Program as you
+received it, or any part of it, contains a notice stating that it is
+governed by this License along with a term that is a further
+restriction, you may remove that term.  If a license document contains
+a further restriction but permits relicensing or conveying under this
+License, you may add to a covered work material governed by the terms
+of that license document, provided that the further restriction does
+not survive such relicensing or conveying.
+
+  If you add terms to a covered work in accord with this section, you
+must place, in the relevant source files, a statement of the
+additional terms that apply to those files, or a notice indicating
+where to find the applicable terms.
+
+  Additional terms, permissive or non-permissive, may be stated in the
+form of a separately written license, or stated as exceptions;
+the above requirements apply either way.
+
+  8. Termination.
+
+  You may not propagate or modify a covered work except as expressly
+provided under this License.  Any attempt otherwise to propagate or
+modify it is void, and will automatically terminate your rights under
+this License (including any patent licenses granted under the third
+paragraph of section 11).
+
+  However, if you cease all violation of this License, then your
+license from a particular copyright holder is reinstated (a)
+provisionally, unless and until the copyright holder explicitly and
+finally terminates your license, and (b) permanently, if the copyright
+holder fails to notify you of the violation by some reasonable means
+prior to 60 days after the cessation.
+
+  Moreover, your license from a particular copyright holder is
+reinstated permanently if the copyright holder notifies you of the
+violation by some reasonable means, this is the first time you have
+received notice of violation of this License (for any work) from that
+copyright holder, and you cure the violation prior to 30 days after
+your receipt of the notice.
+
+  Termination of your rights under this section does not terminate the
+licenses of parties who have received copies or rights from you under
+this License.  If your rights have been terminated and not permanently
+reinstated, you do not qualify to receive new licenses for the same
+material under section 10.
+
+  9. Acceptance Not Required for Having Copies.
+
+  You are not required to accept this License in order to receive or
+run a copy of the Program.  Ancillary propagation of a covered work
+occurring solely as a consequence of using peer-to-peer transmission
+to receive a copy likewise does not require acceptance.  However,
+nothing other than this License grants you permission to propagate or
+modify any covered work.  These actions infringe copyright if you do
+not accept this License.  Therefore, by modifying or propagating a
+covered work, you indicate your acceptance of this License to do so.
+
+  10. Automatic Licensing of Downstream Recipients.
+
+  Each time you convey a covered work, the recipient automatically
+receives a license from the original licensors, to run, modify and
+propagate that work, subject to this License.  You are not responsible
+for enforcing compliance by third parties with this License.
+
+  An "entity transaction" is a transaction transferring control of an
+organization, or substantially all assets of one, or subdividing an
+organization, or merging organizations.  If propagation of a covered
+work results from an entity transaction, each party to that
+transaction who receives a copy of the work also receives whatever
+licenses to the work the party's predecessor in interest had or could
+give under the previous paragraph, plus a right to possession of the
+Corresponding Source of the work from the predecessor in interest, if
+the predecessor has it or can get it with reasonable efforts.
+
+  You may not impose any further restrictions on the exercise of the
+rights granted or affirmed under this License.  For example, you may
+not impose a license fee, royalty, or other charge for exercise of
+rights granted under this License, and you may not initiate litigation
+(including a cross-claim or counterclaim in a lawsuit) alleging that
+any patent claim is infringed by making, using, selling, offering for
+sale, or importing the Program or any portion of it.
+
+  11. Patents.
+
+  A "contributor" is a copyright holder who authorizes use under this
+License of the Program or a work on which the Program is based.  The
+work thus licensed is called the contributor's "contributor version".
+
+  A contributor's "essential patent claims" are all patent claims
+owned or controlled by the contributor, whether already acquired or
+hereafter acquired, that would be infringed by some manner, permitted
+by this License, of making, using, or selling its contributor version,
+but do not include claims that would be infringed only as a
+consequence of further modification of the contributor version.  For
+purposes of this definition, "control" includes the right to grant
+patent sublicenses in a manner consistent with the requirements of
+this License.
+
+  Each contributor grants you a non-exclusive, worldwide, royalty-free
+patent license under the contributor's essential patent claims, to
+make, use, sell, offer for sale, import and otherwise run, modify and
+propagate the contents of its contributor version.
+
+  In the following three paragraphs, a "patent license" is any express
+agreement or commitment, however denominated, not to enforce a patent
+(such as an express permission to practice a patent or covenant not to
+sue for patent infringement).  To "grant" such a patent license to a
+party means to make such an agreement or commitment not to enforce a
+patent against the party.
+
+  If you convey a covered work, knowingly relying on a patent license,
+and the Corresponding Source of the work is not available for anyone
+to copy, free of charge and under the terms of this License, through a
+publicly available network server or other readily accessible means,
+then you must either (1) cause the Corresponding Source to be so
+available, or (2) arrange to deprive yourself of the benefit of the
+patent license for this particular work, or (3) arrange, in a manner
+consistent with the requirements of this License, to extend the patent
+license to downstream recipients.  "Knowingly relying" means you have
+actual knowledge that, but for the patent license, your conveying the
+covered work in a country, or your recipient's use of the covered work
+in a country, would infringe one or more identifiable patents in that
+country that you have reason to believe are valid.
+
+  If, pursuant to or in connection with a single transaction or
+arrangement, you convey, or propagate by procuring conveyance of, a
+covered work, and grant a patent license to some of the parties
+receiving the covered work authorizing them to use, propagate, modify
+or convey a specific copy of the covered work, then the patent license
+you grant is automatically extended to all recipients of the covered
+work and works based on it.
+
+  A patent license is "discriminatory" if it does not include within
+the scope of its coverage, prohibits the exercise of, or is
+conditioned on the non-exercise of one or more of the rights that are
+specifically granted under this License.  You may not convey a covered
+work if you are a party to an arrangement with a third party that is
+in the business of distributing software, under which you make payment
+to the third party based on the extent of your activity of conveying
+the work, and under which the third party grants, to any of the
+parties who would receive the covered work from you, a discriminatory
+patent license (a) in connection with copies of the covered work
+conveyed by you (or copies made from those copies), or (b) primarily
+for and in connection with specific products or compilations that
+contain the covered work, unless you entered into that arrangement,
+or that patent license was granted, prior to 28 March 2007.
+
+  Nothing in this License shall be construed as excluding or limiting
+any implied license or other defenses to infringement that may
+otherwise be available to you under applicable patent law.
+
+  12. No Surrender of Others' Freedom.
+
+  If conditions are imposed on you (whether by court order, agreement or
+otherwise) that contradict the conditions of this License, they do not
+excuse you from the conditions of this License.  If you cannot convey a
+covered work so as to satisfy simultaneously your obligations under this
+License and any other pertinent obligations, then as a consequence you may
+not convey it at all.  For example, if you agree to terms that obligate you
+to collect a royalty for further conveying from those to whom you convey
+the Program, the only way you could satisfy both those terms and this
+License would be to refrain entirely from conveying the Program.
+
+  13. Use with the GNU Affero General Public License.
+
+  Notwithstanding any other provision of this License, you have
+permission to link or combine any covered work with a work licensed
+under version 3 of the GNU Affero General Public License into a single
+combined work, and to convey the resulting work.  The terms of this
+License will continue to apply to the part which is the covered work,
+but the special requirements of the GNU Affero General Public License,
+section 13, concerning interaction through a network will apply to the
+combination as such.
+
+  14. Revised Versions of this License.
+
+  The Free Software Foundation may publish revised and/or new versions of
+the GNU General Public License from time to time.  Such new versions will
+be similar in spirit to the present version, but may differ in detail to
+address new problems or concerns.
+
+  Each version is given a distinguishing version number.  If the
+Program specifies that a certain numbered version of the GNU General
+Public License "or any later version" applies to it, you have the
+option of following the terms and conditions either of that numbered
+version or of any later version published by the Free Software
+Foundation.  If the Program does not specify a version number of the
+GNU General Public License, you may choose any version ever published
+by the Free Software Foundation.
+
+  If the Program specifies that a proxy can decide which future
+versions of the GNU General Public License can be used, that proxy's
+public statement of acceptance of a version permanently authorizes you
+to choose that version for the Program.
+
+  Later license versions may give you additional or different
+permissions.  However, no additional obligations are imposed on any
+author or copyright holder as a result of your choosing to follow a
+later version.
+
+  15. Disclaimer of Warranty.
+
+  THERE IS NO WARRANTY FOR THE PROGRAM, TO THE EXTENT PERMITTED BY
+APPLICABLE LAW.  EXCEPT WHEN OTHERWISE STATED IN WRITING THE COPYRIGHT
+HOLDERS AND/OR OTHER PARTIES PROVIDE THE PROGRAM "AS IS" WITHOUT WARRANTY
+OF ANY KIND, EITHER EXPRESSED OR IMPLIED, INCLUDING, BUT NOT LIMITED TO,
+THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
+PURPOSE.  THE ENTIRE RISK AS TO THE QUALITY AND PERFORMANCE OF THE PROGRAM
+IS WITH YOU.  SHOULD THE PROGRAM PROVE DEFECTIVE, YOU ASSUME THE COST OF
+ALL NECESSARY SERVICING, REPAIR OR CORRECTION.
+
+  16. Limitation of Liability.
+
+  IN NO EVENT UNLESS REQUIRED BY APPLICABLE LAW OR AGREED TO IN WRITING
+WILL ANY COPYRIGHT HOLDER, OR ANY OTHER PARTY WHO MODIFIES AND/OR CONVEYS
+THE PROGRAM AS PERMITTED ABOVE, BE LIABLE TO YOU FOR DAMAGES, INCLUDING ANY
+GENERAL, SPECIAL, INCIDENTAL OR CONSEQUENTIAL DAMAGES ARISING OUT OF THE
+USE OR INABILITY TO USE THE PROGRAM (INCLUDING BUT NOT LIMITED TO LOSS OF
+DATA OR DATA BEING RENDERED INACCURATE OR LOSSES SUSTAINED BY YOU OR THIRD
+PARTIES OR A FAILURE OF THE PROGRAM TO OPERATE WITH ANY OTHER PROGRAMS),
+EVEN IF SUCH HOLDER OR OTHER PARTY HAS BEEN ADVISED OF THE POSSIBILITY OF
+SUCH DAMAGES.
+
+  17. Interpretation of Sections 15 and 16.
+
+  If the disclaimer of warranty and limitation of liability provided
+above cannot be given local legal effect according to their terms,
+reviewing courts shall apply local law that most closely approximates
+an absolute waiver of all civil liability in connection with the
+Program, unless a warranty or assumption of liability accompanies a
+copy of the Program in return for a fee.
+
+                     END OF TERMS AND CONDITIONS
+
+            How to Apply These Terms to Your New Programs
+
+  If you develop a new program, and you want it to be of the greatest
+possible use to the public, the best way to achieve this is to make it
+free software which everyone can redistribute and change under these terms.
+
+  To do so, attach the following notices to the program.  It is safest
+to attach them to the start of each source file to most effectively
+state the exclusion of warranty; and each file should have at least
+the "copyright" line and a pointer to where the full notice is found.
+
+    <one line to give the program's name and a brief idea of what it does.>
+    Copyright (C) <year>  <name of author>
+
+    This program is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+Also add information on how to contact you by electronic and paper mail.
+
+  If the program does terminal interaction, make it output a short
+notice like this when it starts in an interactive mode:
+
+    <program>  Copyright (C) <year>  <name of author>
+    This program comes with ABSOLUTELY NO WARRANTY; for details type `show w'.
+    This is free software, and you are welcome to redistribute it
+    under certain conditions; type `show c' for details.
+
+The hypothetical commands `show w' and `show c' should show the appropriate
+parts of the General Public License.  Of course, your program's commands
+might be different; for a GUI interface, you would use an "about box".
+
+  You should also get your employer (if you work as a programmer) or school,
+if any, to sign a "copyright disclaimer" for the program, if necessary.
+For more information on this, and how to apply and follow the GNU GPL, see
+<https://www.gnu.org/licenses/>.
+
+  The GNU General Public License does not permit incorporating your program
+into proprietary programs.  If your program is a subroutine library, you
+may consider it more useful to permit linking proprietary applications with
+the library.  If this is what you want to do, use the GNU Lesser General
+Public License instead of this License.  But first, please read
+<https://www.gnu.org/licenses/why-not-lgpl.html>.
+</file>
+
+<file path="main.py">
+import os
+from app.main import get_book_content, extract_free_chapters, get_chapter_content
+from app.board import generate_board
+from app.image import get_book_images, get_book_content as create_book_image
+from app.audio import create_book_audio
+from app.tts import create_tts
+from app.video import create_book_video
+from app.video_end import save_output_video
+
+
+if __name__ == "__main__":
+    book_id = "1043294775"
+    book = get_book_content(book_id)
+    if book:
+        extract_free_chapters(book, book_id)
+        get_chapter_content(book_id)
+    else:
+        print("获取书籍内容失败")
+    success = generate_board(book_id)
+    if success:
+        # 生成图片
+        create_book_image(book_id)
+        # 高清修复
+        get_book_images(book_id)
+        # 生成音频
+        create_book_audio(book_id)
+        # 生成字幕文件
+        create_tts(book_id, os.getcwd())
+        # 视频分段生成
+        create_book_video(book_id)
+        # 视频总合成
+        save_output_video(book_id)
+</file>
+
+<file path="prompt.txt">
+你是一个资深的剧本编辑
+请根据我输入的内容生成分镜，分镜要包含所有小说内容，并且严格按照我输入的格式给我，其中 text为分镜文字内容，screenKeywords_cn 为分镜内容的镜头语言中文描述 screenKeywords_en为 镜头语言的英文描述，一个好的镜头语言可能包含这几类
+角色，动作，场景，情绪，风格，镜头角度，灯光与环境
+角色   年轻男子、老年女性、英雄、反派   描述角色的年龄、外观或角色类型。
+动作   跑步、微笑、哭泣、惊讶地看   明确角色的动作或表情。
+场景   森林、城市街道、海滩、厨房   指定故事发生的地点或背景。
+情绪   快乐、悲伤、神秘、浪漫   设定场景的氛围或情绪基调。
+风格   素描、水彩、卡通、写实、动漫   选择图像的艺术风格。
+镜头角度   特写、中景、广角、俯视   指定摄像机的视角或构图。
+灯光与环境   阳光、雨天、黄昏、夜景、背光  描述光线条件或环境氛围。
+不要对分镜文案进行提炼，一些角色人名，可以根据名字推测是男女还是青年少年，提示词中不要用人名
+错误例子 
+角色：年轻男子，动作：喝酒、沉思，场景：星空下，情绪：孤独、怀念，镜头角度：中景，灯光与环境：星光、夜晚
+正确例子 
+年轻男子，喝酒、沉思，星空下，孤独、怀念，中景，星光、夜晚
+Recipe =[
+    {
+        "id": "1",
+        "text": "xxxxxx",
+        "lensLanguage_cn": "",
+        "lensLanguage_en": ""
+    },
+    {
+        "id":"2",
+        "text":"xxxxxxxx",
+        "lensLanguage_cn":"",
+        "lensLanguage_en":""
+    }
+]
+Return: list[Recipe]
+</file>
+
+<file path="pyproject.toml">
+[project]
+name = "1"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "accelerate==1.5.2",
+    "aiohappyeyeballs==2.6.1",
+    "aiohttp==3.11.13",
+    "aiosignal==1.3.2",
+    "annotated-types==0.7.0",
+    "anyio==4.8.0",
+    "attrs==25.3.0",
+    "audioread==3.0.1",
+    "beautifulsoup4==4.13.3",
+    "black==25.1.0",
+    "bs4==0.0.2",
+    "certifi==2025.1.31",
+    "cffi==1.17.1",
+    "charset-normalizer==3.4.1",
+    "click==8.1.8",
+    "colorama==0.4.6",
+    "datasets==3.4.0",
+    "decorator==4.4.2",
+    "dill==0.3.8",
+    "distro==1.9.0",
+    "dotenv==0.9.9",
+    "edge-tts>=7.0.2",
+    "filelock==3.13.1",
+    "frozenlist==1.5.0",
+    "fsspec==2024.6.1",
+    "h11==0.14.0",
+    "httpcore==1.0.7",
+    "httpx==0.28.1",
+    "huggingface-hub==0.29.3",
+    "idna==3.10",
+    "imageio==2.37.0",
+    "imageio-ffmpeg==0.6.0",
+    "jinja2==3.1.4",
+    "jiter==0.9.0",
+    "joblib==1.4.2",
+    "lazy-loader==0.4",
+    "librosa==0.11.0",
+    "llvmlite==0.44.0",
+    "markupsafe==2.1.5",
+    "moviepy==1.0.3",
+    "mpmath==1.3.0",
+    "msgpack==1.1.0",
+    "multidict==6.1.0",
+    "multiprocess==0.70.16",
+    "mypy-extensions==1.0.0",
+    "networkx==3.3",
+    "numba==0.61.0",
+    "numpy==2.1.3",
+    "openai==1.66.3",
+    "packaging==24.2",
+    "pandas==2.2.3",
+    "pathspec==0.12.1",
+    "pillow==11.1.0",
+    "platformdirs==4.3.6",
+    "pooch==1.8.2",
+    "proglog==0.1.10",
+    "propcache==0.3.0",
+    "psutil==7.0.0",
+    "pyarrow==19.0.1",
+    "pycparser==2.22",
+    "pydantic==2.10.6",
+    "pydantic-core==2.27.2",
+    "python-dateutil==2.9.0.post0",
+    "python-dotenv==1.0.1",
+    "pytz==2025.1",
+    "pyyaml==6.0.2",
+    "regex==2024.11.6",
+    "requests==2.32.3",
+    "safetensors==0.5.3",
+    "scikit-learn==1.6.1",
+    "scipy==1.15.2",
+    "setuptools==70.2.0",
+    "six==1.17.0",
+    "sniffio==1.3.1",
+    "soundfile==0.13.1",
+    "soupsieve==2.6",
+    "soxr==0.5.0.post1",
+    "sympy==1.13.1",
+    "threadpoolctl==3.6.0",
+    "tokenizers==0.21.1",
+    "tqdm==4.67.1",
+    "transformers==4.49.0",
+    "typer>=0.16.0",
+    "typing-extensions==4.12.2",
+    "tzdata==2025.1",
+    "urllib3==2.3.0",
+    "xxhash==3.5.0",
+    "yarl==1.18.3",
+]
+</file>
+
+<file path="README.md">
+# AI 小说推文自动化工作流
+
+[成片-6小时](https://www.bilibili.com/video/BV1mmQvYEEwb/)
+[爱发电](https://afdian.com/a/dmzw1918)
+
+## 项目结构
+
+```
+.
+├── app
+├── data
+│   │─ book
+├── README.md
+└── requirements.txt
+```
+
+## 项目使用到的大模型
+
+-   DeepSeek-V3
+-   gemini-2.0-flash
+-   硅基智能-FunAudioLLM/CosyVoice2-0.5B
+-   秋葉 aaaki forge 整合包
+
+## 项目流程
+
+| 文件名       | 功能           | 模型/库                  |
+| ------------ | -------------- | ------------------------ |
+| main.py      | 获取书籍内容   | 无                       |
+| board.py     | 生成章节分镜   | gemini-2.0-flash         |
+| prompt.py    | 润色分镜提示词 | deepseek-v3              |
+| image.py     | 生成图片       | 秋葉 aaaki forge 版      |
+| audio.py     | 生成音频       | CosyVoice2-0.5B:benjamin |
+| tts.py       | 生成字幕       | 本地运行 whisper         |
+| video.py     | 生成视频       | ffmpeg-gpu 加速版        |
+| video_end.py | 生成完整视频   | ffmpeg-gpu 加速版        |
+
+## 本地运行
+
+> 本项目使用的是`uv`来管理依赖,建议 python 版本`>=3.10`
+
+1. 安装`uv`
+
+```shell
+pip install uv
+```
+
+2. 创建虚拟环境
+
+```shell
+uv venv --python 3.12
+```
+
+```sh
+    .\.venv\Scripts\activate
+```
+
+3. 安装包
+
+```shell
+uv add -r requirements.txt
+```
+
+4. 安装 torch 环境
+    > torch 环境请根据你系统的 cuda 版本来安装 [torch 官网](https://pytorch.org/)
+
+```sh
+uv pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+```
+
+可以通过`nvidia-smi`来查询你的显卡支持的最高`cuda`版本
+
+```sh
+nvidia-smi
++-----------------------------------------------------------------------------------------+
+| NVIDIA-SMI 560.94                 Driver Version: 560.94         CUDA Version: 12.6     |
+|-----------------------------------------+------------------------+----------------------+
+| GPU  Name                  Driver-Model | Bus-Id          Disp.A | Volatile Uncorr. ECC |
+| Fan  Temp   Perf          Pwr:Usage/Cap |           Memory-Usage | GPU-Util  Compute M. |
+|                                         |                        |               MIG M. |
+|=========================================+========================+======================|
+|   0  NVIDIA GeForce RTX 4070 Ti   WDDM  |   00000000:01:00.0  On |                  N/A |
+|  0%   28C    P8              4W /  285W |    2157MiB /  12282MiB |      2%      Default |
+|                                         |                        |                  N/A |
++-----------------------------------------+------------------------+----------------------+
+```
+
+通过 `nvcc` 来查询你电脑已安装的`cuda`版本
+
+> 其实是你环境变量中配置的版本而已，一个电脑上可以安装多个 cuda
+
+```sh
+nvcc: NVIDIA (R) Cuda compiler driver
+Copyright (c) 2005-2022 NVIDIA Corporation
+Built on Wed_Sep_21_10:41:10_Pacific_Daylight_Time_2022
+Cuda compilation tools, release 11.8, V11.8.89
+Build cuda_11.8.r11.8/compiler.31833905_0
+```
+
+## 环境配置
+
+复制 `.env.example` 文件，改名为 `.env`  
+配置其缺少的 APIKey  
+其中 `AUDIO_API_KEY` 是可以支持多 Key 轮询的，用`,`分割  
+(做到这一步我才意识到可以多 Key 支持高并发 😂 如果需 Gemini 需要高并发的话，可能需要手动去 copy 多 key 的处理的代码到`board.py`中了)   
+配置`起点达人中心`的 Cookie 用来抓取小说 [起点达人中心](https://koc.yuewen.com/home)  
+安装`ffmpeg`最好安装GPU加速版，否则生成的很慢(好像新一点的版本都已经支持gpu加速了) [Github](https://github.com/BtbN/FFmpeg-Builds/releases)  
+使用 `ffmpeg -hwaccels` 来列出硬件加速选项
+```sh
+Hardware acceleration methods:
+cuda
+vaapi
+dxva2
+qsv
+d3d11va
+opencl
+vulkan
+```
+
+## 运行项目
+
+我是直接按照项目流程来逐个运行文件的 
+
+```sh
+uv run app/main.py     # 获取小说内容
+uv run board.py    # 生成分镜
+uv run prompt.py   # 优化提示词
+uv run image.py    # 生成图片
+uv run audio.py    # 合成音频  
+uv run tts.py      # 生成字幕
+uv run video.py    # 制作分镜视频
+uv run video_end.py # 最终合成
+```
+
+如果你想要直接运行 也可以直接运行 main.py
+```sh
+uv run main.py
+```
+
+## Whisper 模型规格概览
+
+Whisper 模型规格
+| 模型规格 | 参数量 | 最低显存要求 |
+|---------|-------|------------|
+| Tiny | 39M | ~1GB |
+| Base | 74M | ~1GB |
+| Small | 244M | ~2GB |
+| Medium | 769M | ~5GB |
+| Large | 1550M | ~10GB |
+| Large-v2| 1550M | ~10GB |
+| Large-v3| 1550M | ~10GB |
+
+3. **运行示例代码**
+可以先写个测试，运行示例代码来下载 Whisper
+```python
+import torch
+from transformers import WhisperProcessor, WhisperForConditionalGeneration
+
+# 选择适合您显存的模型大小，例如"medium"
+model_id = "openai/whisper-medium"
+
+# 启用半精度以节省显存
+processor = WhisperProcessor.from_pretrained(model_id)
+model = WhisperForConditionalGeneration.from_pretrained(
+    model_id,
+    torch_dtype=torch.float16,
+    device_map="auto"
+)
+
+# 确保模型在GPU上运行
+device = "cuda" if torch.cuda.is_available() else "cpu"
+model = model.to(device)
+```
+</file>
+
+</files>
