@@ -1,8 +1,8 @@
 import requests
 import json
 import os
-import base64
 import time
+from urllib.parse import quote
 from io import BytesIO
 from PIL import Image  # 需要安装 Pillow 库: pip install Pillow
 from dotenv import load_dotenv
@@ -15,44 +15,75 @@ import glob
 # 加载环境变量
 load_dotenv(override=True)
 
-# 用AI生成画面
-def create_Image(prompt: str) -> str:
-    url = os.getenv("SD_API_URL")
-
-    payload = json.dumps(
-        {
-            "prompt": f"{prompt}{os.getenv('SD_LORA')}",
-            "sampler_name": "Euler",
-            "scheduler": "Exponential",
-            "sampler_index": "Euler",
-            "restore_faces": True,
-            "cfg_scale": 7,
-            "steps": os.getenv("SD_STEPS"),
-            "width": 512,
-            "height": 640,
-            "batch_size": 1,
-            "n_iter": 1,
+# 使用Flux API生成图像
+def create_Image(prompt: str) -> bytes:
+    """
+    使用Pollinations.ai的Flux API生成图像
+    
+    Args:
+        prompt: 图像描述文本
+        
+    Returns:
+        bytes: 图像数据
+    """
+    try:
+        # URL编码提示词
+        encoded_prompt = quote(prompt)
+        
+        # 构建API URL
+        base_url = "https://image.pollinations.ai/prompt"
+        
+        # 从环境变量获取参数，设置默认值
+        model = os.getenv("FLUX_MODEL", "flux")
+        width = int(os.getenv("FLUX_WIDTH", "1024"))
+        height = int(os.getenv("FLUX_HEIGHT", "1024"))
+        enhance = os.getenv("FLUX_ENHANCE", "false").lower()
+        safe = os.getenv("FLUX_SAFE", "false").lower()
+        nologo = os.getenv("FLUX_NOLOGO", "false").lower()
+        
+        # 构建完整URL
+        url = f"{base_url}/{encoded_prompt}"
+        
+        # 构建参数
+        params = {
+            "model": model,
+            "width": width,
+            "height": height,
+            "enhance": enhance,
+            "safe": safe,
+            "nologo": nologo,
         }
-    )
-    headers = {"Content-Type": "application/json"}
-    response = requests.request("POST", url, headers=headers, data=payload)
-    response_data = response.json()
-
-    # 检查是否有错误返回
-    if "detail" in response_data:
-        error_msg = (
-            response_data["detail"][0]["msg"] if response_data["detail"] else "未知错误"
-        )
-        raise Exception(f"生成图片失败: {error_msg}")
-
-    # 检查是否有正确的返回格式
-    if "images" in response_data and len(response_data["images"]) > 0:
-        image_data = response_data["images"][0]
-        del response_data
-        gc.collect()
-        return image_data
-    else:
-        raise Exception("生成图片失败: 返回数据格式不正确")
+        
+        # 只添加非默认值的参数
+        filtered_params = {}
+        if model != "flux":
+            filtered_params["model"] = model
+        if width != 1024:
+            filtered_params["width"] = width
+        if height != 1024:
+            filtered_params["height"] = height
+        if enhance == "true":
+            filtered_params["enhance"] = "true"
+        if safe == "true":
+            filtered_params["safe"] = "true"
+        if nologo == "true":
+            filtered_params["nologo"] = "true"
+        
+        # 发送请求
+        response = requests.get(url, params=filtered_params, timeout=300)
+        response.raise_for_status()
+        
+        # 验证响应是否为图像
+        content_type = response.headers.get('content-type', '')
+        if not content_type.startswith('image/'):
+            raise Exception(f"响应不是图像格式: {content_type}")
+        
+        return response.content
+        
+    except requests.exceptions.RequestException as e:
+        raise Exception(f"Flux API请求失败: {str(e)}")
+    except Exception as e:
+        raise Exception(f"生成图片失败: {str(e)}")
 
 
 # 调用高清修复
@@ -91,15 +122,24 @@ def delete_log_file():
             print(f"删除日志文件失败 {log_file}: {e}")
     time.sleep(0.1)
 
-# 保存base64图片到文件（保存为JPG格式）
-def save_base64_image(base64_data: str, save_path: str):
+# 保存图片数据到文件（保存为JPG格式）
+def save_image_data(image_data: bytes, save_path: str):
+    """
+    保存图片数据到文件
+    
+    Args:
+        image_data: 图片字节数据
+        save_path: 保存路径
+        
+    Returns:
+        bool or str: 成功返回True，失败返回错误信息
+    """
     # 确保目录存在
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
 
-    # 将base64数据解码为图片并保存为JPG
     try:
         # 使用上下文管理器处理BytesIO
-        with BytesIO(base64.b64decode(base64_data)) as image_buffer:
+        with BytesIO(image_data) as image_buffer:
             # 使用上下文管理器处理图像
             with Image.open(image_buffer) as image:
                 # 保存为JPG
@@ -195,14 +235,14 @@ def get_book_content(book_id: str):
 
                         while retry_count < 3 and not success:
                             try:
-                                # 生成图片
-                                base64_image = create_Image(prompt)
+                                # 使用Flux API生成图片
+                                image_data = create_Image(prompt)
 
                                 # 保存图片
-                                save_result = save_base64_image(
-                                    base64_image, image_path
+                                save_result = save_image_data(
+                                    image_data, image_path
                                 )
-                                del base64_image
+                                del image_data
                                 gc.collect()
                                 if save_result is True:
                                     success = True

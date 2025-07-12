@@ -5,7 +5,7 @@ from bs4 import BeautifulSoup
 import json
 import os
 import re
-from tool import clean_text, extract_chapter_id_and_name
+from .tool import clean_text, extract_chapter_id_and_name
 from tqdm import tqdm
 import time
 

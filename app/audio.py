@@ -1,13 +1,13 @@
-import requests
+import asyncio
 from dotenv import load_dotenv
 import os
 import json
 from tqdm import tqdm
-import concurrent.futures
 import time
 import logging
 import threading
-import random
+from typing import List, Tuple
+from .edge_tts_impl import EdgeTTSService, generate_audio_batch
 
 # 设置日志 - 仅记录错误
 logging.basicConfig(
@@ -24,39 +24,35 @@ load_dotenv(override=True)
 json_locks = {}
 
 
-# 调用API来生成音频
-def generate_audio(text: str, max_retries=3):
-    url = os.getenv("AUDIO_API_URL")
-    api_key = os.getenv("AUDIO_API_KEY")
-    model = os.getenv("AUDIO_MODEL")
-    keys = api_key.split(",")
-    random_key = random.choice(keys)
-
-    payload = {
-        "model": model,
-        "input": text,
-        "voice": "FunAudioLLM/CosyVoice2-0.5B:benjamin",
-        "response_format": "mp3",
-        "sample_rate": 44100,
-    }
-    headers = {
-        "Authorization": f"Bearer {random_key}",
-        "Content-Type": "application/json",
-    }
-
-    for retry in range(max_retries):
-        try:
-            response = requests.post(url, json=payload, headers=headers)
-            if response.status_code == 200:
-                return response.content
-            else:
-                time.sleep(1)  # 休息一秒再重试
-        except Exception as e:
-            if retry == max_retries - 1:  # 只在最后一次重试失败时记录日志
-                logger.error(f"生成音频出错：{str(e)}")
-            time.sleep(1)
-
-    return None
+# 使用Edge-TTS生成音频的异步函数
+async def generate_audio_edge_tts(text: str, audio_path: str, subtitle_path: str = None) -> bool:
+    """
+    使用Edge-TTS生成音频和字幕
+    
+    Args:
+        text: 要转换的文本
+        audio_path: 音频文件保存路径
+        subtitle_path: 字幕文件保存路径（可选）
+        
+    Returns:
+        bool: 生成是否成功
+    """
+    try:
+        # 获取语音设置
+        voice = os.getenv("EDGE_TTS_VOICE", "zh-CN-XiaoxiaoNeural")
+        rate = os.getenv("EDGE_TTS_RATE", "+0%")
+        pitch = os.getenv("EDGE_TTS_PITCH", "+0Hz")
+        
+        tts_service = EdgeTTSService(voice=voice, rate=rate, pitch=pitch)
+        success, _ = await tts_service.generate_audio_with_subtitles(
+            text, audio_path, subtitle_path
+        )
+        
+        return success
+        
+    except Exception as e:
+        logger.error(f"Edge-TTS生成音频出错：{str(e)}")
+        return False
 
 
 # 更新JSON文件中的数据
@@ -88,8 +84,8 @@ def update_json_with_audio_path(chapter_file_path, item_id, audio_path):
             return False
 
 
-# 处理单个条目
-def process_item(item, book_id, chapter_file_path, pbar):
+# 处理单个条目（异步版本）
+async def process_item_async(item, book_id, chapter_file_path, pbar):
     item_id = item["id"]
     text = item["text"]
 
@@ -97,6 +93,7 @@ def process_item(item, book_id, chapter_file_path, pbar):
     chapter_name = os.path.basename(chapter_file_path).split(".")[0]
     audio_dir = f"data/book/{book_id}/audio/{chapter_name}"
     audio_path = f"{audio_dir}/{item_id}.mp3"
+    subtitle_path = f"{audio_dir}/{item_id}.srt"
 
     # 确保目录存在
     os.makedirs(audio_dir, exist_ok=True)
@@ -111,38 +108,32 @@ def process_item(item, book_id, chapter_file_path, pbar):
         pbar.update(1)  # 更新进度条
         return True
 
-    # 生成音频
-    audio_data = generate_audio(text)
+    # 使用Edge-TTS生成音频和字幕
+    success = await generate_audio_edge_tts(text, audio_path, subtitle_path)
 
     # 检查是否生成成功
-    if audio_data is None:
+    if not success:
         logger.error(f"处理项目 {chapter_name}/{item_id} 失败，跳过")
         pbar.update(1)  # 更新进度条
         return False
 
-    # 保存音频文件
-    try:
-        with open(audio_path, "wb") as f:
-            f.write(audio_data)
-
-        # 更新JSON文件，添加audio_path字段
-        relative_audio_path = f"/data/book/{book_id}/audio/{chapter_name}/{item_id}.mp3"
-        update_json_with_audio_path(chapter_file_path, item_id, relative_audio_path)
-    except Exception as e:
-        logger.error(f"保存音频文件失败：{str(e)}")
-        pbar.update(1)
-        return False
+    # 更新JSON文件，添加audio_path字段
+    relative_audio_path = f"audio/{chapter_name}/{item_id}.mp3"
+    update_json_with_audio_path(chapter_file_path, item_id, relative_audio_path)
 
     pbar.update(1)  # 更新进度条
     return True
 
 
 def create_book_audio(book_id: str):
-    # 从环境变量获取线程数
+    """
+    使用Edge-TTS创建图书音频，支持异步并发处理
+    """
+    # 从环境变量获取并发数
     try:
-        num_threads = int(os.getenv("AUDIO_THREADS", "1"))
+        max_concurrent = int(os.getenv("EDGE_TTS_CONCURRENT", "4"))
     except ValueError:
-        num_threads = 1  # 默认使用1个线程
+        max_concurrent = 4  # 默认使用4个并发
 
     # 获取 data/book/{book_id}/storyboard 目录下的所有json
     storyboard_dir = f"data/book/{book_id}/storyboard"
@@ -170,29 +161,66 @@ def create_book_audio(book_id: str):
         logger.error(f"计算总进度失败：{str(e)}")
         return
 
-    # 创建总进度条
-    with tqdm(total=total_items, desc="总进度", unit="图") as pbar:
-        # 使用线程池
-        with concurrent.futures.ThreadPoolExecutor(max_workers=num_threads) as executor:
-            # 遍历每个章节文件
+    # 异步处理函数
+    async def process_all_chapters():
+        # 创建总进度条
+        with tqdm(total=total_items, desc="生成音频", unit="项") as pbar:
+            # 处理每个章节文件
             for chapter_file_path in chapter_file_paths:
                 try:
                     # 读取章节数据
                     with open(chapter_file_path, "r", encoding="utf-8") as f:
                         chapter_data = json.load(f)
 
-                    # 提交任务到线程池
-                    futures = []
+                    # 准备异步任务
+                    tasks = []
                     for item in chapter_data:
-                        future = executor.submit(
-                            process_item, item, book_id, chapter_file_path, pbar
-                        )
-                        futures.append(future)
+                        task = process_item_async(item, book_id, chapter_file_path, pbar)
+                        tasks.append(task)
 
-                    # 等待所有任务完成
-                    concurrent.futures.wait(futures)
+                    # 限制并发数并执行任务
+                    semaphore = asyncio.Semaphore(max_concurrent)
+                    
+                    async def limited_task(task):
+                        async with semaphore:
+                            return await task
+                    
+                    limited_tasks = [limited_task(task) for task in tasks]
+                    await asyncio.gather(*limited_tasks, return_exceptions=True)
+                    
                 except Exception as e:
                     logger.error(f"处理章节 {chapter_file_path} 失败：{str(e)}")
+
+    # 运行异步处理
+    try:
+        asyncio.run(process_all_chapters())
+    except Exception as e:
+        logger.error(f"异步音频生成失败：{str(e)}")
+        # 回退到原始同步方法的简化版本
+        logger.info("回退到同步处理...")
+        _create_book_audio_sync_fallback(book_id, chapter_file_paths, total_items)
+
+
+def _create_book_audio_sync_fallback(book_id: str, chapter_file_paths: List[str], total_items: int):
+    """
+    同步回退方法（在异步失败时使用）
+    """
+    with tqdm(total=total_items, desc="生成音频(同步)", unit="项") as pbar:
+        for chapter_file_path in chapter_file_paths:
+            try:
+                with open(chapter_file_path, "r", encoding="utf-8") as f:
+                    chapter_data = json.load(f)
+                
+                for item in chapter_data:
+                    # 使用同步方式处理，但仍然调用异步Edge-TTS
+                    try:
+                        result = asyncio.run(process_item_async(item, book_id, chapter_file_path, pbar))
+                    except Exception as e:
+                        logger.error(f"同步回退处理项目失败：{str(e)}")
+                        pbar.update(1)
+                        
+            except Exception as e:
+                logger.error(f"同步回退处理章节失败：{str(e)}")
 
 
 if __name__ == "__main__":
