@@ -274,6 +274,10 @@ def get_book_content(book_id: str):
 
 
 def get_book_images(book_id: str):
+
+    # 新增：根據環境變數 UPSCALY_ENABLE 決定是否執行高清修復
+    upscaly_enable = os.getenv("UPSCALY_ENABLE", "true").lower() in ["true", "1", "yes"]
+
     # 获取 data/book/{book_id}/storyboard 目录下的所有json
     storyboard_dir = f"data/book/{book_id}/storyboard"
     chapter_files = os.listdir(storyboard_dir)
@@ -310,25 +314,30 @@ def get_book_images(book_id: str):
                                 delete_log_file()
                                 continue
 
-                        # 高清修复
-                        upscale_result = upscale_image(image_path)
-                        if upscale_result is True:
-                            # 更新进度条
-                            pbar.update(1)
-                            # 删除log文件
-                            delete_log_file()
+                        # 根據 UPSCALY_ENABLE 決定是否執行高清修復
+                        if upscaly_enable:
+                            upscale_result = upscale_image(image_path)
+                            if upscale_result is True:
+                                # 更新进度条
+                                pbar.update(1)
+                                # 删除log文件
+                                delete_log_file()
+                            else:
+                                # 重试
+                                retry_count = 0
+                                while retry_count < 3:
+                                    upscale_result = upscale_image(image_path)
+                                    if upscale_result is True:
+                                        # 更新进度条
+                                        pbar.update(1)
+                                        # 删除log文件
+                                        delete_log_file()
+                                        break
+                                    retry_count += 1
                         else:
-                            # 重试
-                            retry_count = 0
-                            while retry_count < 3:
-                                upscale_result = upscale_image(image_path)
-                                if upscale_result is True:
-                                    # 更新进度条
-                                    pbar.update(1)
-                                    # 删除log文件
-                                    delete_log_file()
-                                    break
-                                retry_count += 1
+                            # 不執行高清修復，僅更新進度條
+                            pbar.update(1)
+                            delete_log_file()
             
 
 
