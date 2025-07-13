@@ -191,128 +191,24 @@ def generate_board_json(chapter_content: str, max_retries=3, retry_delay=2, use_
     return []
 
 
-def estimate_tokens(text: str) -> int:
+def split_content_into_chunks(content, chunk_size=100):
     """
-    估算文本的token数量
-    中文：1字符 ≈ 1.5 tokens
-    英文：1字符 ≈ 0.25 tokens
-    混合文本的保守估算：1字符 ≈ 1 token
-    """
-    return len(text)
+    将内容按行分割成多个块
 
-
-def split_content_into_chunks(content: str, max_tokens: int = None, chunk_size: int = None, overlap_tokens: int = 500):
-    """
-    基于token数量智能分割内容，优化现代LLM的上下文窗口利用率
-    
     Args:
         content (str): 要分割的内容
-        max_tokens (int): 每个块的最大token数（默认根据环境变量设置）
-        chunk_size (int): 兼容性参数，如果提供则使用行数分割（旧版本兼容）
-        overlap_tokens (int): 块之间的重叠token数，保持上下文连续性
-        
+        chunk_size (int): 每个块的最大行数
+
     Returns:
         list: 分割后的内容块列表
     """
-    # 兼容性：如果提供了chunk_size参数，使用旧的行数分割方式
-    if chunk_size is not None:
-        lines = content.splitlines()
-        chunks = []
-        for i in range(0, len(lines), chunk_size):
-            chunk = "\n".join(lines[i : i + chunk_size])
-            chunks.append(chunk)
-        return chunks
-    
-    # 从环境变量获取配置，默认使用现代LLM的较大块大小
-    if max_tokens is None:
-        max_tokens = int(os.getenv("STORYBOARD_CHUNK_TOKENS", "30000"))  # 30K tokens for 120K context models
-    
-    # 如果内容本身不超过最大token数，直接返回
-    estimated_tokens = estimate_tokens(content)
-    if estimated_tokens <= max_tokens:
-        return [content]
-    
-    log_info(f"内容较长({estimated_tokens:,} tokens)，使用智能分块策略")
-    log_info(f"分块配置: 最大{max_tokens:,} tokens/块, 重叠{overlap_tokens} tokens")
-    
-    # 按段落分割，保持语义完整性
-    paragraphs = content.split('\n\n')
+    lines = content.splitlines()
     chunks = []
-    current_chunk = ""
-    current_tokens = 0
-    
-    for paragraph in paragraphs:
-        paragraph_tokens = estimate_tokens(paragraph)
-        
-        # 如果单个段落就超过了最大token数，需要进一步分割
-        if paragraph_tokens > max_tokens:
-            # 先保存当前块（如果有内容）
-            if current_chunk.strip():
-                chunks.append(current_chunk.strip())
-                current_chunk = ""
-                current_tokens = 0
-            
-            # 按句子分割超长段落
-            sentences = paragraph.split('。')
-            temp_chunk = ""
-            temp_tokens = 0
-            
-            for sentence in sentences:
-                if not sentence.strip():
-                    continue
-                sentence_with_period = sentence + '。'
-                sentence_tokens = estimate_tokens(sentence_with_period)
-                
-                if temp_tokens + sentence_tokens > max_tokens and temp_chunk:
-                    chunks.append(temp_chunk.strip())
-                    # 添加重叠内容以保持上下文
-                    if overlap_tokens > 0:
-                        temp_chunk = sentence_with_period + "\n"
-                        temp_tokens = sentence_tokens
-                    else:
-                        temp_chunk = ""
-                        temp_tokens = 0
-                else:
-                    temp_chunk += sentence_with_period + "\n"
-                    temp_tokens += sentence_tokens
-            
-            if temp_chunk.strip():
-                current_chunk = temp_chunk
-                current_tokens = temp_tokens
-        else:
-            # 检查是否需要开始新的块
-            if current_tokens + paragraph_tokens > max_tokens and current_chunk:
-                chunks.append(current_chunk.strip())
-                
-                # 添加重叠内容以保持上下文连续性
-                if overlap_tokens > 0 and current_tokens > overlap_tokens:
-                    # 取当前块的最后部分作为重叠
-                    overlap_text = current_chunk[-overlap_tokens:]
-                    # 找到完整句子的开始
-                    sentence_start = overlap_text.find('。')
-                    if sentence_start != -1:
-                        overlap_text = overlap_text[sentence_start + 1:]
-                    current_chunk = overlap_text + "\n\n" + paragraph
-                    current_tokens = estimate_tokens(current_chunk)
-                else:
-                    current_chunk = paragraph
-                    current_tokens = paragraph_tokens
-            else:
-                if current_chunk:
-                    current_chunk += "\n\n" + paragraph
-                else:
-                    current_chunk = paragraph
-                current_tokens += paragraph_tokens
-    
-    # 添加最后一个块
-    if current_chunk.strip():
-        chunks.append(current_chunk.strip())
-    
-    log_info(f"智能分块完成: {len(chunks)} 个块")
-    for i, chunk in enumerate(chunks):
-        chunk_tokens = estimate_tokens(chunk)
-        log_debug(f"块 {i+1}: {chunk_tokens:,} tokens")
-    
+
+    for i in range(0, len(lines), chunk_size):
+        chunk = "\n".join(lines[i : i + chunk_size])
+        chunks.append(chunk)
+
     return chunks
 
 
@@ -411,22 +307,15 @@ def generate_board(book_id: str):
         
         log_debug(f"章節 {chapter_file.name}: {line_count} 行, {content_size} 字符")
 
-        # 智能分块：使用token估算而非固定行数
-        estimated_tokens = estimate_tokens(chapter_content)
-        max_tokens = int(os.getenv("STORYBOARD_CHUNK_TOKENS", "30000"))
-        
-        log_debug(f"章節 {chapter_file.name}: {line_count} 行, {content_size} 字符, ~{estimated_tokens:,} tokens")
-
-        # 如果内容超过单次处理的token限制，进行智能分块处理
-        if estimated_tokens > max_tokens:
-            log_info(f"章節 {chapter_file.name} 內容較長({estimated_tokens:,} tokens)，進行智能分塊處理")
-            chunks = split_content_into_chunks(chapter_content)  # 使用新的token智能分块
+        # 如果內容超過20行或5KB，進行分塊處理
+        if line_count > 20 or content_size > 5000:
+            log_info(f"章節 {chapter_file.name} 內容較長，進行分塊處理")
+            chunks = split_content_into_chunks(chapter_content, 20)  # 每塊20行
             chunk_results = []
 
             log_info(f"將章節分為 {len(chunks)} 個塊進行處理")
             for i, chunk in enumerate(chunks):
-                chunk_tokens = estimate_tokens(chunk)
-                log_debug(f"處理塊 {i+1}/{len(chunks)}, 內容長度: {len(chunk)} 字符, ~{chunk_tokens:,} tokens")
+                log_debug(f"處理塊 {i+1}/{len(chunks)}, 內容長度: {len(chunk)} 字符")
                 chunk_json = generate_board_json(chunk, use_stream=True)
 
                 if chunk_json:

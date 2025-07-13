@@ -35,10 +35,3 @@ testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
-
-[dependency-groups]
-dev = [
-    "black>=25.1.0",
-    "pytest>=8.4.1",
-    "pytest-asyncio>=1.0.0",
-]
