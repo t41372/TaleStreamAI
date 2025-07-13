@@ -224,7 +224,7 @@ def generate_book_images(book_id: str):
                         # 检查是否需要更新JSON数据中的image_path字段
                         if "image_path" not in item:
                             # 添加相对路径到JSON数据 - 使用pathlib确保跨平台兼容
-                            relative_image_path = str(images_dir.relative_to(Path.cwd()) / f"{item_id}.jpg")
+                            relative_image_path = str(images_dir / f"{item_id}.jpg")
                             item["image_path"] = relative_image_path
                             json_updated = True
                             log_debug(f"更新分鏡 {item_id} 的圖片路徑: {relative_image_path}")
@@ -256,7 +256,7 @@ def generate_book_images(book_id: str):
                                                   details=f"分鏡 {item_id} 圖片生成成功")
                                     
                                     # 添加image_path字段到JSON数据 - 使用pathlib确保跨平台兼容
-                                    relative_image_path = str(images_dir.relative_to(Path.cwd()) / f"{item_id}.jpg")
+                                    relative_image_path = str(images_dir / f"{item_id}.jpg")
                                     item["image_path"] = relative_image_path
                                     json_updated = True
                                     log_debug(f"添加分鏡 {item_id} 的圖片路徑: {relative_image_path}")
