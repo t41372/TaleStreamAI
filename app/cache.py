@@ -79,9 +79,3 @@ def cache(cache_path: Path, result_type: str = "text"):
         return wrapper
 
     return decorator
-
-
-# 预先定义好的缓存装饰器实例
-llm_cache = cache(settings.paths.cache_llm, "text")
-image_cache = cache(settings.paths.cache_image, "binary")
-audio_cache = cache(settings.paths.cache_audio, "binary")

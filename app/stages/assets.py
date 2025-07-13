@@ -4,48 +4,25 @@ import os
 import asyncio
 from pathlib import Path
 from concurrent.futures import ProcessPoolExecutor
-import aiohttp
 
-import edge_tts
-from moviepy.editor import ImageClip, AudioFileClip, CompositeVideoClip
-from PIL import Image
+# v2.x: Import specific classes, avoid moviepy.editor
+from moviepy.video.VideoClip import ImageClip
+from moviepy.audio.io.AudioFileClip import AudioFileClip
+from moviepy.video.compositing.CompositeVideoClip import CompositeVideoClip
+from PIL import Image  # Still needed for image processing in _generate_image_asset
+from loguru import logger
 
 from ..config import settings
-from loguru import logger
 from ..models import Shot
-from ..cache import image_cache, audio_cache
+from ..services.image_provider import PollinationsImageGenerator
+from ..services.audio_provider import EdgeTTSAudioGenerator
+
+# Instantiate service providers
+image_generator = PollinationsImageGenerator()
+audio_generator = EdgeTTSAudioGenerator()
 
 
-# --- Image Generation ---
-@image_cache
-async def _fetch_image(prompt: str) -> bytes:
-    """使用 aiohttp 异步从 Flux API 获取图片"""
-    # Pollinations.ai is a free service, but we can use a more specific model if needed
-    # encoded_prompt = urllib.parse.quote(prompt)
-    # url = (f"https://image.pollinations.ai/prompt/{encoded_prompt}"
-    #        f"?width={settings.image_width}&height={settings.image_height}&nologo=true")
-
-    # Using a different free API that seems more stable for direct use
-    url = "https://flux.fails.network/image/generator"
-    payload = {
-        "prompt": prompt,
-        "width": settings.image_width,
-        "height": settings.image_height,
-        "style": "anime",  # Corresponds to our desired style
-    }
-
-    async with aiohttp.ClientSession() as session:
-        try:
-            async with session.post(url, json=payload, timeout=300) as response:
-                response.raise_for_status()
-                return await response.read()
-        except aiohttp.ClientError as e:
-            logger.error(
-                f"Image generation API request failed for prompt '{prompt[:30]}...': {e}"
-            )
-            raise
-
-
+# --- Image Generation (Now uses the service provider) ---
 async def _generate_image_asset(shot: Shot, book_path: Path) -> Shot:
     """生成单个镜头的图片资产"""
     if shot.error:
@@ -56,16 +33,16 @@ async def _generate_image_asset(shot: Shot, book_path: Path) -> Shot:
     shot.image_path = image_dir / f"{shot.shot_id}.jpg"
 
     if shot.image_path.exists():
-        logger.debug(
-            f"Image already exists for shot {shot.get_full_id()}, skipping generation."
-        )
+        logger.debug(f"Image already exists for shot {shot.get_full_id()}, skipping generation.")
         return shot
 
     logger.debug(f"Generating image for shot {shot.get_full_id()}...")
     try:
         if not shot.image_prompt:
             raise ValueError("Image prompt is missing.")
-        image_data = await _fetch_image(shot.image_prompt)
+
+        image_data = await image_generator.generate(shot.image_prompt)
+
         with Image.open(io.BytesIO(image_data)) as img:
             img.convert("RGB").save(shot.image_path, "JPEG", quality=95)
     except Exception as e:
@@ -75,22 +52,7 @@ async def _generate_image_asset(shot: Shot, book_path: Path) -> Shot:
     return shot
 
 
-# --- Audio Generation ---
-@audio_cache
-async def _fetch_audio(text: str, voice: str) -> bytes:
-    """使用 edge-tts 异步获取音频"""
-    try:
-        communicate = edge_tts.Communicate(text, voice)
-        audio_data = b""
-        async for chunk in communicate.stream():
-            if chunk["type"] == "audio":
-                audio_data += chunk["data"]
-        return audio_data
-    except Exception as e:
-        logger.error(f"Edge-TTS generation failed for text '{text[:30]}...': {e}")
-        raise
-
-
+# --- Audio Generation (Now uses the service provider) ---
 async def _generate_audio_asset(shot: Shot, book_path: Path) -> Shot:
     """生成单个镜头的音频资产"""
     if shot.error:
@@ -102,16 +64,16 @@ async def _generate_audio_asset(shot: Shot, book_path: Path) -> Shot:
     shot.srt_path = shot.audio_path.with_suffix(".srt")  # srt logic to be added later
 
     if shot.audio_path.exists():
-        logger.debug(
-            f"Audio already exists for shot {shot.get_full_id()}, skipping generation."
-        )
+        logger.debug(f"Audio already exists for shot {shot.get_full_id()}, skipping generation.")
         return shot
 
     logger.debug(f"Generating audio for shot {shot.get_full_id()}...")
     try:
         if not shot.original_text:
             raise ValueError("Original text for audio is missing.")
-        audio_data = await _fetch_audio(shot.original_text, settings.edge_tts_voice)
+
+        audio_data = await audio_generator.generate(shot.original_text, settings.edge_tts_voice)
+
         shot.audio_path.write_bytes(audio_data)
         # Placeholder for srt generation
         shot.srt_path.write_text("")
@@ -128,6 +90,8 @@ def _generate_video_clip_asset_sync(shot: Shot, book_path: Path) -> Shot:
     [同步函数] 为单个镜头合成视频片段。
     这个函数将在一个单独的进程中运行，以避免阻塞事件循环。
     """
+    # v2.x: No longer need monkey-patch, MoviePy 2.x natively supports Pillow 10+
+
     if shot.error or not shot.image_path or not shot.audio_path:
         logger.warning(
             f"Skipping video clip for shot {shot.get_full_id()} due to previous errors or missing assets."
@@ -146,32 +110,31 @@ def _generate_video_clip_asset_sync(shot: Shot, book_path: Path) -> Shot:
     try:
         # Validate assets exist before processing
         if not shot.audio_path.exists() or not shot.image_path.exists():
-            raise FileNotFoundError(
-                f"Missing audio or image file for shot {shot.get_full_id()}"
-            )
+            raise FileNotFoundError(f"Missing audio or image file for shot {shot.get_full_id()}")
 
-        with (
-            AudioFileClip(str(shot.audio_path)) as audio_clip,
-            ImageClip(str(shot.image_path)).set_duration(
-                audio_clip.duration
-            ) as image_clip,
-        ):
-            # Simple zoom-in effect (Ken Burns)
+        # Use compatible API while removing monkey-patch
+        with AudioFileClip(str(shot.audio_path)) as audio_clip:
             final_size = (settings.video_width, settings.video_height)
 
+            # Create image clip with duration matching audio
+            image_clip: ImageClip = ImageClip(str(shot.image_path)).with_duration(
+                audio_clip.duration
+            )
+
+            # Simple zoom-in effect (Ken Burns) with method chaining where possible
             # Resize image to be slightly larger than final dimensions for zoom
-            zoomed_image = image_clip.resize(
+            zoomed_image: ImageClip = image_clip.resized(
                 height=int(final_size[1] * 1.15)
-            ).set_position(("center", "center"))
+            ).with_position(("center", "center"))
 
             # Animate the zoom over the duration of the clip
-            final_video = zoomed_image.resize(
+            final_video = zoomed_image.resized(
                 lambda t: 1 + 0.15 * (1 - t / audio_clip.duration)
-            )
-            final_video = final_video.set_position(("center", "center"))
+            ).with_position(("center", "center"))
 
+            # Compose video with audio
             final_clip = CompositeVideoClip([final_video], size=final_size)
-            final_clip = final_clip.set_audio(audio_clip)
+            final_clip = final_clip.with_audio(audio_clip)
 
             final_clip.write_videofile(
                 str(shot.video_clip_path),
@@ -183,9 +146,7 @@ def _generate_video_clip_asset_sync(shot: Shot, book_path: Path) -> Shot:
             )
     except Exception as e:
         shot.error = f"Video synthesis failed: {e}"
-        logger.exception(
-            f"Shot {shot.get_full_id()} failed during video synthesis"
-        )
+        logger.exception(f"Shot {shot.get_full_id()} failed during video synthesis")
 
     return shot
 

@@ -22,7 +22,7 @@ from openai.types.chat import ChatCompletionChunk, ChatCompletionMessageParam
 
 from .config import LLMConfig, settings
 from loguru import logger
-from .cache import llm_cache
+from .cache import cache
 
 
 EMOJI_LIST = ["🚀", "💡", "✨", "🤖", "🧠", "✍️", "🎨", "🎬", "🎶", "💬"]
@@ -38,7 +38,7 @@ class UnifiedLLMClient:
         )
         self.semaphore = asyncio.Semaphore(settings.max_llm_threads)
 
-    @llm_cache
+    @cache(settings.paths.cache_llm, "text")
     async def _cached_chat_completion(self, messages_json: str, system: str) -> str:
         """内部缓存方法，只用于非流式调用"""
         full_response = ""
@@ -116,6 +116,9 @@ class UnifiedLLMClient:
                 reasoning_counter = 0
                 content_counter = 0
                 async for chunk in stream:
+                    if not chunk or not chunk.choices:
+                        print("~", end="", flush=True)
+                        continue
                     # 检查是否有 'reasoning' (某些模型支持)
                     if (
                         hasattr(chunk.choices[0].delta, "reasoning_content")

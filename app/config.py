@@ -20,6 +20,12 @@ def _get_int_env(var_name: str, default: int) -> int:
     return int(value.split("#")[0].strip())
 
 
+def _get_str_env(var_name: str, default: str) -> str:
+    """Helper to get a cleaned string value from environment variables."""
+    value = os.getenv(var_name, default)
+    return value.split("#")[0].strip()
+
+
 @dataclass(frozen=True)
 class LLMConfig:
     """配置用于 LLM 客户端"""
@@ -62,38 +68,41 @@ class Settings:
     """全局应用配置"""
 
     # 书籍配置
-    book_source: str = os.getenv("BOOK_SOURCE", "test_novel.txt")
-    custom_book_id: str | None = os.getenv("CUSTOM_BOOK_ID")
-    cookie: str = os.getenv("COOKIE", "")  # 用于需要登录才能访问的网站
+    book_source: str = _get_str_env("BOOK_SOURCE", "test_novel.txt")
+    custom_book_id: str | None = os.getenv(
+        "CUSTOM_BOOK_ID"
+    )  # os.getenv is ok for optional values
+    cookie: str = _get_str_env("COOKIE", "")  # 用于需要登录才能访问的网站
 
     # LLM 配置
     storyboard_llm: LLMConfig = field(
         default_factory=lambda: LLMConfig(
-            api_key=os.getenv("STORYBOARD_API_KEY", ""),
-            base_url=os.getenv("STORYBOARD_API_URL", ""),
-            model=os.getenv("STORYBOARD_MODEL", "gemini-1.5-flash-latest"),
+            api_key=_get_str_env("STORYBOARD_API_KEY", ""),
+            base_url=_get_str_env("STORYBOARD_API_URL", ""),
+            model=_get_str_env("STORYBOARD_MODEL", "gemini-1.5-flash-latest"),
             max_tokens=_get_int_env("STORYBOARD_MAX_TOKENS", 8000),
         )
     )
     prompt_llm: LLMConfig = field(
         default_factory=lambda: LLMConfig(
-            api_key=os.getenv("PROMPT_API_KEY", ""),
-            base_url=os.getenv("PROMPT_API_URL", ""),
-            model=os.getenv("PROMPT_MODEL", "deepseek-v2"),
-            max_tokens=_get_int_env("PROMPT_MAX_TOKENS", 8000),  # 也为 prompt_llm 预留
+            api_key=_get_str_env("PROMPT_API_KEY", ""),
+            base_url=_get_str_env("PROMPT_API_URL", ""),
+            model=_get_str_env("PROMPT_MODEL", "deepseek-v2"),
+            max_tokens=_get_int_env("PROMPT_MAX_TOKENS", 8000),
         )
     )
 
     # 图像生成配置
     image_width: int = _get_int_env("IMAGE_WIDTH", 1024)
     image_height: int = _get_int_env("IMAGE_HEIGHT", 1024)
-    image_style_prompt: str = os.getenv(
+    image_style_prompt: str = _get_str_env(
         "IMAGE_STYLE_PROMPT",
         "cinematic, dramatic lighting, detailed, illustration, anime style, 8k",
     )
+    image_threads: int = _get_int_env("IMAGE_THREADS", 1)
 
     # 音频生成配置
-    edge_tts_voice: str = os.getenv("EDGE_TTS_VOICE", "zh-CN-YunxiNeural")
+    edge_tts_voice: str = _get_str_env("EDGE_TTS_VOICE", "zh-CN-YunxiNeural")
     audio_threads: int = _get_int_env("AUDIO_THREADS", 5)
 
     # 视频生成配置

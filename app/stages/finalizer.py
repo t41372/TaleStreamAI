@@ -4,7 +4,8 @@ from datetime import timedelta
 from pathlib import Path
 
 import srt
-from moviepy.editor import VideoFileClip
+# v2.x: Import VideoFileClip from specific module, avoid moviepy.editor  
+from moviepy.video.io.VideoFileClip import VideoFileClip
 
 from ..config import settings
 from loguru import logger
