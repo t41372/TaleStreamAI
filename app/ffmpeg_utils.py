@@ -1,6 +1,7 @@
 # app/ffmpeg_utils.py
 import subprocess
 import platform
+import os
 import functools
 from loguru import logger
 
@@ -12,22 +13,21 @@ def get_ffmpeg_gpu_params():
     使用 lru_cache 缓存结果，避免重复检测。
 
     Returns:
-        dict: 包含 pre_input 和 output_params 的字典。
+        dict: 包含 codec, preset, threads, 和 ffmpeg_params 的字典。
     """
     system = platform.system()
     logger.info(f"检测操作系统: {system}")
 
     # 检查 ffmpeg 是否存在
     try:
-        subprocess.run(
-            ["ffmpeg", "-version"], capture_output=True, check=True, text=True
-        )
+        subprocess.run(["ffmpeg", "-version"], capture_output=True, check=True)
     except (FileNotFoundError, subprocess.CalledProcessError):
         logger.warning("系统中未找到 ffmpeg 或无法执行。将使用纯 CPU 编码。")
         return {
-            "pre_input": [],
-            "output_params": {"codec": "libx264"},
-            "extra_params": [],
+            "codec": "libx264",
+            "preset": "ultrafast",
+            "threads": os.cpu_count() or 2,
+            "ffmpeg_params": [],
         }
 
     # NVIDIA (Windows/Linux)
@@ -45,9 +45,11 @@ def get_ffmpeg_gpu_params():
                 if "h264_nvenc" in result.stdout:
                     logger.info("✅ 检测到 h264_nvenc 编码器。启用 NVIDIA GPU 加速。")
                     return {
-                        "pre_input": ["-hwaccel", "cuda"],
-                        "output_params": {"codec": "h264_nvenc", "preset": "fast"},
-                        "extra_params": [],  # NVIDIA编码器不需要额外参数
+                        "codec": "h264_nvenc",
+                        "preset": "fast",
+                        "threads": os.cpu_count() or 2,
+                        # '-hwaccel cuda' 更多用于解码，编码器h264_nvenc会自动使用GPU。
+                        "ffmpeg_params": [],
                     }
         except (FileNotFoundError, subprocess.CalledProcessError):
             pass  # ffmpeg 未找到或执行失败，继续尝试其他选项
@@ -69,12 +71,10 @@ def get_ffmpeg_gpu_params():
                         "✅ 检测到 h264_videotoolbox 编码器。启用 macOS GPU 加速。"
                     )
                     return {
-                        "pre_input": ["-hwaccel", "videotoolbox"],
-                        "output_params": {"codec": "h264_videotoolbox"},
-                        "extra_params": [
-                            "-b:v",
-                            "8000k",
-                        ],  # 比特率参数通过ffmpeg_params传递
+                        "codec": "h264_videotoolbox",
+                        "preset": "ultrafast", # VideoToolbox没有像x264那样的preset，但保留此字段以保持API一致性
+                        "threads": os.cpu_count() or 2,
+                        "ffmpeg_params": ["-b:v", "8000k"], # 为macOS编码器设置合理的比特率
                     }
         except (FileNotFoundError, subprocess.CalledProcessError):
             pass
@@ -93,12 +93,18 @@ def get_ffmpeg_gpu_params():
                 if "h264_qsv" in result.stdout:
                     logger.info("✅ 检测到 h264_qsv 编码器。启用 Intel QSV 加速。")
                     return {
-                        "pre_input": ["-hwaccel", "qsv"],
-                        "output_params": {"codec": "h264_qsv", "preset": "fast"},
-                        "extra_params": [],  # Intel QSV不需要额外参数
+                        "codec": "h264_qsv",
+                        "preset": "fast",
+                        "threads": os.cpu_count() or 2,
+                        "ffmpeg_params": ["-load_plugin", "hevc_hw", "-hwaccel", "qsv"],
                     }
         except (FileNotFoundError, subprocess.CalledProcessError):
             pass
 
     logger.warning("⚠️ 未检测到可用的 GPU 加速硬件。将回退到 CPU (libx264) 进行编码。")
-    return {"pre_input": [], "output_params": {"codec": "libx264"}, "extra_params": []}
+    return {
+        "codec": "libx264",
+        "preset": "ultrafast",
+        "threads": os.cpu_count() or 2,
+        "ffmpeg_params": [],
+    }

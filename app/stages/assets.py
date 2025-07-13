@@ -2,6 +2,7 @@
 import io
 import os
 import asyncio
+import tempfile
 from pathlib import Path
 from concurrent.futures import ProcessPoolExecutor
 
@@ -16,6 +17,7 @@ from ..config import settings
 from ..models import Shot
 from ..services.image_provider import PollinationsImageGenerator
 from ..services.audio_provider import EdgeTTSAudioGenerator
+from ..ffmpeg_utils import get_ffmpeg_gpu_params
 
 # Instantiate service providers
 image_generator = PollinationsImageGenerator()
@@ -112,6 +114,10 @@ def _generate_video_clip_asset_sync(shot: Shot, book_path: Path) -> Shot:
         if not shot.audio_path.exists() or not shot.image_path.exists():
             raise FileNotFoundError(f"Missing audio or image file for shot {shot.get_full_id()}")
 
+        # 获取动态的、硬件加速的ffmpeg参数
+        encoding_params = get_ffmpeg_gpu_params()
+        logger.debug(f"Using encoding params: {encoding_params}")
+
         # Use compatible API while removing monkey-patch
         with AudioFileClip(str(shot.audio_path)) as audio_clip:
             final_size = (settings.video_width, settings.video_height)
@@ -136,14 +142,20 @@ def _generate_video_clip_asset_sync(shot: Shot, book_path: Path) -> Shot:
             final_clip = CompositeVideoClip([final_video], size=final_size)
             final_clip = final_clip.with_audio(audio_clip)
 
-            final_clip.write_videofile(
-                str(shot.video_clip_path),
-                fps=24,
-                codec="libx264",  # Use a more compatible encoder
-                threads=os.cpu_count() or 2,
-                logger=None,
-                preset="ultrafast",  # Prioritize speed over quality for clip generation
-            )
+            # 使用 NamedTemporaryFile 来安全地管理临时音频文件
+            with tempfile.NamedTemporaryFile(suffix=".mp3", delete=True) as tmp_audio:
+                final_clip.write_videofile(
+                    str(shot.video_clip_path),
+                    fps=24,
+                    codec=encoding_params["codec"],
+                    threads=encoding_params["threads"],
+                    preset=encoding_params["preset"],
+                    logger=None,
+                    # 将额外参数传递给ffmpeg
+                    ffmpeg_params=encoding_params["ffmpeg_params"],
+                    # 关键：指定临时音频文件路径，防止污染根目录
+                    temp_audiofile=tmp_audio.name,
+                )
     except Exception as e:
         shot.error = f"Video synthesis failed: {e}"
         logger.exception(f"Shot {shot.get_full_id()} failed during video synthesis")

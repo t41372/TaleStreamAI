@@ -262,53 +262,6 @@ AUDIO_SPEED=1.0
 # This file makes the 'stages' directory a Python package.
 </file>
 
-<file path="app/models.py">
-# app/models.py
-from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Optional
-
-
-@dataclass
-class Shot:
-    """
-    表示一个独立的分镜（或镜头）。
-    这是我们流水线中处理的基本工作单元。
-    """
-
-    # 核心内容
-    shot_id: int
-    chapter_index: int
-    original_text: str
-
-    # 生成的数据 (最终使用的提示词)
-    image_prompt: Optional[str] = None
-
-    # 生成的资产路径
-    storyboard_path: Optional[Path] = None  # 指向分镜脚本JSON文件的路径
-    refined_prompt_path: Optional[Path] = None  # 指向优化后的提示词TXT文件的路径
-    image_path: Optional[Path] = None
-    audio_path: Optional[Path] = None
-    srt_path: Optional[Path] = None
-    video_clip_path: Optional[Path] = None
-
-    # 状态
-    error: Optional[str] = None
-
-    def get_full_id(self) -> str:
-        """返回唯一的镜头ID，格式为 '章节-镜头'"""
-        return f"{self.chapter_index}-{self.shot_id}"
-
-
-@dataclass
-class Chapter:
-    """表示一个完整的章节，包含多个分镜。"""
-
-    index: int
-    content: str
-    shots: list[Shot] = field(default_factory=list)
-</file>
-
 <file path="app/tool.py">
 import re
 
@@ -634,6 +587,7 @@ async def get_chapters(
 # app/ffmpeg_utils.py
 import subprocess
 import platform
+import os
 import functools
 from loguru import logger
 
@@ -645,22 +599,21 @@ def get_ffmpeg_gpu_params():
     使用 lru_cache 缓存结果，避免重复检测。
 
     Returns:
-        dict: 包含 pre_input 和 output_params 的字典。
+        dict: 包含 codec, preset, threads, 和 ffmpeg_params 的字典。
     """
     system = platform.system()
     logger.info(f"检测操作系统: {system}")
 
     # 检查 ffmpeg 是否存在
     try:
-        subprocess.run(
-            ["ffmpeg", "-version"], capture_output=True, check=True, text=True
-        )
+        subprocess.run(["ffmpeg", "-version"], capture_output=True, check=True)
     except (FileNotFoundError, subprocess.CalledProcessError):
         logger.warning("系统中未找到 ffmpeg 或无法执行。将使用纯 CPU 编码。")
         return {
-            "pre_input": [],
-            "output_params": {"codec": "libx264"},
-            "extra_params": [],
+            "codec": "libx264",
+            "preset": "ultrafast",
+            "threads": os.cpu_count() or 2,
+            "ffmpeg_params": [],
         }
 
     # NVIDIA (Windows/Linux)
@@ -678,9 +631,11 @@ def get_ffmpeg_gpu_params():
                 if "h264_nvenc" in result.stdout:
                     logger.info("✅ 检测到 h264_nvenc 编码器。启用 NVIDIA GPU 加速。")
                     return {
-                        "pre_input": ["-hwaccel", "cuda"],
-                        "output_params": {"codec": "h264_nvenc", "preset": "fast"},
-                        "extra_params": [],  # NVIDIA编码器不需要额外参数
+                        "codec": "h264_nvenc",
+                        "preset": "fast",
+                        "threads": os.cpu_count() or 2,
+                        # '-hwaccel cuda' 更多用于解码，编码器h264_nvenc会自动使用GPU。
+                        "ffmpeg_params": [],
                     }
         except (FileNotFoundError, subprocess.CalledProcessError):
             pass  # ffmpeg 未找到或执行失败，继续尝试其他选项
@@ -702,12 +657,10 @@ def get_ffmpeg_gpu_params():
                         "✅ 检测到 h264_videotoolbox 编码器。启用 macOS GPU 加速。"
                     )
                     return {
-                        "pre_input": ["-hwaccel", "videotoolbox"],
-                        "output_params": {"codec": "h264_videotoolbox"},
-                        "extra_params": [
-                            "-b:v",
-                            "8000k",
-                        ],  # 比特率参数通过ffmpeg_params传递
+                        "codec": "h264_videotoolbox",
+                        "preset": "ultrafast", # VideoToolbox没有像x264那样的preset，但保留此字段以保持API一致性
+                        "threads": os.cpu_count() or 2,
+                        "ffmpeg_params": ["-b:v", "8000k"], # 为macOS编码器设置合理的比特率
                     }
         except (FileNotFoundError, subprocess.CalledProcessError):
             pass
@@ -726,15 +679,377 @@ def get_ffmpeg_gpu_params():
                 if "h264_qsv" in result.stdout:
                     logger.info("✅ 检测到 h264_qsv 编码器。启用 Intel QSV 加速。")
                     return {
-                        "pre_input": ["-hwaccel", "qsv"],
-                        "output_params": {"codec": "h264_qsv", "preset": "fast"},
-                        "extra_params": [],  # Intel QSV不需要额外参数
+                        "codec": "h264_qsv",
+                        "preset": "fast",
+                        "threads": os.cpu_count() or 2,
+                        "ffmpeg_params": ["-load_plugin", "hevc_hw", "-hwaccel", "qsv"],
                     }
         except (FileNotFoundError, subprocess.CalledProcessError):
             pass
 
     logger.warning("⚠️ 未检测到可用的 GPU 加速硬件。将回退到 CPU (libx264) 进行编码。")
-    return {"pre_input": [], "output_params": {"codec": "libx264"}, "extra_params": []}
+    return {
+        "codec": "libx264",
+        "preset": "ultrafast",
+        "threads": os.cpu_count() or 2,
+        "ffmpeg_params": [],
+    }
+</file>
+
+<file path="app/models.py">
+# app/models.py
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Optional
+
+
+@dataclass
+class Shot:
+    """
+    表示一个独立的分镜（或镜头）。
+    这是我们流水线中处理的基本工作单元。
+    """
+
+    # 核心内容
+    shot_id: int
+    chapter_index: int
+    original_text: str
+
+    # 生成的数据 (最终使用的提示词)
+    image_prompt: Optional[str] = None
+
+    # 生成的资产路径
+    storyboard_path: Optional[Path] = None  # 指向分镜脚本JSON文件的路径
+    refined_prompt_path: Optional[Path] = None  # 指向优化后的提示词TXT文件的路径
+    image_path: Optional[Path] = None
+    audio_path: Optional[Path] = None
+    srt_path: Optional[Path] = None
+    video_clip_path: Optional[Path] = None
+
+    # 状态
+    error: Optional[str] = None
+
+    def get_full_id(self) -> str:
+        """返回唯一的镜头ID，格式为 '章节-镜头'"""
+        return f"{self.chapter_index}-{self.shot_id}"
+
+
+@dataclass
+class Chapter:
+    """表示一个完整的章节，包含多个分镜。"""
+
+    index: int
+    content: str
+    shots: list[Shot] = field(default_factory=list)
+</file>
+
+<file path=".gitignore">
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+data
+
+.mp4
+.env
+
+prompt_history
+</file>
+
+<file path="app/stages/assets.py">
+# app/stages/assets.py
+import io
+import os
+import asyncio
+import tempfile
+from pathlib import Path
+from concurrent.futures import ProcessPoolExecutor
+
+# v2.x: Import specific classes, avoid moviepy.editor
+from moviepy.video.VideoClip import ImageClip
+from moviepy.audio.io.AudioFileClip import AudioFileClip
+from moviepy.video.compositing.CompositeVideoClip import CompositeVideoClip
+from PIL import Image  # Still needed for image processing in _generate_image_asset
+from loguru import logger
+
+from ..config import settings
+from ..models import Shot
+from ..services.image_provider import PollinationsImageGenerator
+from ..services.audio_provider import EdgeTTSAudioGenerator
+from ..ffmpeg_utils import get_ffmpeg_gpu_params
+
+# Instantiate service providers
+image_generator = PollinationsImageGenerator()
+audio_generator = EdgeTTSAudioGenerator()
+
+
+# --- Image Generation (Now uses the service provider) ---
+async def _generate_image_asset(shot: Shot, book_path: Path) -> Shot:
+    """生成单个镜头的图片资产"""
+    if shot.error:
+        return shot
+
+    image_dir = book_path / "images" / str(shot.chapter_index)
+    image_dir.mkdir(parents=True, exist_ok=True)
+    shot.image_path = image_dir / f"{shot.shot_id}.jpg"
+
+    if shot.image_path.exists():
+        logger.debug(f"Image already exists for shot {shot.get_full_id()}, skipping generation.")
+        return shot
+
+    logger.debug(f"Generating image for shot {shot.get_full_id()}...")
+    try:
+        if not shot.image_prompt:
+            raise ValueError("Image prompt is missing.")
+
+        image_data = await image_generator.generate(shot.image_prompt)
+
+        with Image.open(io.BytesIO(image_data)) as img:
+            img.convert("RGB").save(shot.image_path, "JPEG", quality=95)
+    except Exception as e:
+        shot.error = f"Image generation failed: {e}"
+        logger.error(f"Shot {shot.get_full_id()} failed during image generation: {e}")
+
+    return shot
+
+
+# --- Audio Generation (Now uses the service provider) ---
+async def _generate_audio_asset(shot: Shot, book_path: Path) -> Shot:
+    """生成单个镜头的音频资产"""
+    if shot.error:
+        return shot
+
+    audio_dir = book_path / "audio" / str(shot.chapter_index)
+    audio_dir.mkdir(parents=True, exist_ok=True)
+    shot.audio_path = audio_dir / f"{shot.shot_id}.mp3"
+    shot.srt_path = shot.audio_path.with_suffix(".srt")  # srt logic to be added later
+
+    if shot.audio_path.exists():
+        logger.debug(f"Audio already exists for shot {shot.get_full_id()}, skipping generation.")
+        return shot
+
+    logger.debug(f"Generating audio for shot {shot.get_full_id()}...")
+    try:
+        if not shot.original_text:
+            raise ValueError("Original text for audio is missing.")
+
+        audio_data = await audio_generator.generate(shot.original_text, settings.edge_tts_voice)
+
+        shot.audio_path.write_bytes(audio_data)
+        # Placeholder for srt generation
+        shot.srt_path.write_text("")
+    except Exception as e:
+        shot.error = f"Audio generation failed: {e}"
+        logger.error(f"Shot {shot.get_full_id()} failed during audio generation: {e}")
+
+    return shot
+
+
+# --- Video Clip Generation (CPU-Bound) ---
+def _generate_video_clip_asset_sync(shot: Shot, book_path: Path) -> Shot:
+    """
+    [同步函数] 为单个镜头合成视频片段。
+    这个函数将在一个单独的进程中运行，以避免阻塞事件循环。
+    """
+    # v2.x: No longer need monkey-patch, MoviePy 2.x natively supports Pillow 10+
+
+    if shot.error or not shot.image_path or not shot.audio_path:
+        logger.warning(
+            f"Skipping video clip for shot {shot.get_full_id()} due to previous errors or missing assets."
+        )
+        return shot
+
+    video_dir = book_path / "video" / str(shot.chapter_index)
+    video_dir.mkdir(parents=True, exist_ok=True)
+    shot.video_clip_path = video_dir / f"{shot.shot_id}.mp4"
+
+    if shot.video_clip_path.exists():
+        logger.debug(f"Video clip exists for shot {shot.get_full_id()}, skipping.")
+        return shot
+
+    logger.debug(f"Synthesizing video for shot {shot.get_full_id()}...")
+    try:
+        # Validate assets exist before processing
+        if not shot.audio_path.exists() or not shot.image_path.exists():
+            raise FileNotFoundError(f"Missing audio or image file for shot {shot.get_full_id()}")
+
+        # 获取动态的、硬件加速的ffmpeg参数
+        encoding_params = get_ffmpeg_gpu_params()
+        logger.debug(f"Using encoding params: {encoding_params}")
+
+        # Use compatible API while removing monkey-patch
+        with AudioFileClip(str(shot.audio_path)) as audio_clip:
+            final_size = (settings.video_width, settings.video_height)
+
+            # Create image clip with duration matching audio
+            image_clip: ImageClip = ImageClip(str(shot.image_path)).with_duration(
+                audio_clip.duration
+            )
+
+            # Simple zoom-in effect (Ken Burns) with method chaining where possible
+            # Resize image to be slightly larger than final dimensions for zoom
+            zoomed_image: ImageClip = image_clip.resized(
+                height=int(final_size[1] * 1.15)
+            ).with_position(("center", "center"))
+
+            # Animate the zoom over the duration of the clip
+            final_video = zoomed_image.resized(
+                lambda t: 1 + 0.15 * (1 - t / audio_clip.duration)
+            ).with_position(("center", "center"))
+
+            # Compose video with audio
+            final_clip = CompositeVideoClip([final_video], size=final_size)
+            final_clip = final_clip.with_audio(audio_clip)
+
+            # 使用 NamedTemporaryFile 来安全地管理临时音频文件
+            with tempfile.NamedTemporaryFile(suffix=".mp3", delete=True) as tmp_audio:
+                final_clip.write_videofile(
+                    str(shot.video_clip_path),
+                    fps=24,
+                    codec=encoding_params["codec"],
+                    threads=encoding_params["threads"],
+                    preset=encoding_params["preset"],
+                    logger=None,
+                    # 将额外参数传递给ffmpeg
+                    ffmpeg_params=encoding_params["ffmpeg_params"],
+                    # 关键：指定临时音频文件路径，防止污染根目录
+                    temp_audiofile=tmp_audio.name,
+                )
+    except Exception as e:
+        shot.error = f"Video synthesis failed: {e}"
+        logger.exception(f"Shot {shot.get_full_id()} failed during video synthesis")
+
+    return shot
+
+
+# --- Main Orchestrator ---
+async def generate_all_assets(
+    shots: list[Shot], book_path: Path, process_executor: ProcessPoolExecutor
+) -> list[Shot]:
+    """
+    资产生成阶段的主函数。
+    并发生成所有镜头的图片和音频，然后将视频合成任务分派到进程池。
+    """
+    # 步骤 1: 并发生成所有I/O密集型资产（图片和音频）
+    logger.info(
+        f"Starting parallel generation of I/O-bound assets (image, audio) for {len(shots)} shots..."
+    )
+
+    # We create image and audio tasks separately to handle potential errors gracefully
+    image_tasks = [_generate_image_asset(shot, book_path) for shot in shots]
+    audio_tasks = [_generate_audio_asset(shot, book_path) for shot in shots]
+
+    # Await both sets of I/O tasks
+    await asyncio.gather(*image_tasks, *audio_tasks)
+
+    # 步骤 2: 将CPU密集型任务（视频合成）提交到进程池
+    logger.info("Scheduling CPU-bound assets (video clips) to process pool...")
+    loop = asyncio.get_event_loop()
+    cpu_tasks = []
+    for shot in shots:
+        # run_in_executor 在一个指定的执行器（这里是进程池）中运行函数
+        task = loop.run_in_executor(
+            process_executor,
+            _generate_video_clip_asset_sync,  # 必须是同步函数
+            shot,
+            book_path,
+        )
+        cpu_tasks.append(task)
+
+    # 等待所有视频片段合成任务完成
+    processed_shots = await asyncio.gather(*cpu_tasks)
+
+    return list(processed_shots)
+</file>
+
+<file path="app/cache.py">
+# app/cache.py
+import json
+import pickle
+import hashlib
+from pathlib import Path
+from typing import Callable
+from functools import wraps
+
+from .config import settings
+from loguru import logger
+
+
+def _generate_cache_key(func: Callable, *args, **kwargs) -> str:
+    """根据函数和参数生成一个确定性的哈希键"""
+    # 将args和kwargs合并并排序，以确保确定性
+    # 使用json.dumps进行序列化，可以处理大部分内置类型
+    # sort_keys=True保证了字典键的顺序
+    # default=str处理了无法直接序列化为JSON的对象（如Path对象）
+    try:
+        payload = {
+            "args": args,
+            "kwargs": kwargs,
+        }
+        serialized_data = json.dumps(payload, sort_keys=True, default=str).encode(
+            "utf-8"
+        )
+    except TypeError:
+        # 对于更复杂或不可序列化为JSON的对象，使用pickle作为后备方案
+        # 注意：pickle的输出可能因Python版本而异，但对于一个稳定环境是可靠的
+        payload = (args, kwargs)
+        serialized_data = pickle.dumps(payload)
+
+    # 使用SHA256生成哈希值
+    return hashlib.sha256(serialized_data).hexdigest()
+
+
+def cache(cache_path: Path, result_type: str = "text"):
+    """
+    一个通用的缓存装饰器，可缓存函数结果到文件。
+    支持文本和二进制两种模式。
+
+    :param cache_path: 缓存文件的存储目录 (e.g., settings.paths.cache_llm)
+    :param result_type: 'text' 或 'binary'
+    """
+
+    def decorator(func: Callable) -> Callable:
+        @wraps(func)
+        async def wrapper(*args, **kwargs):
+            cache_key = _generate_cache_key(func, *args, **kwargs)
+            cache_file = cache_path / f"{func.__name__}_{cache_key}"
+
+            # 检查缓存是否存在
+            if cache_file.exists():
+                logger.debug(
+                    f"✅ 缓存命中: {func.__name__} (key: {cache_key[:8]}...), 从 {cache_file} 读取"
+                )
+                if result_type == "binary":
+                    return cache_file.read_bytes()
+                else:
+                    return cache_file.read_text(encoding="utf-8")
+
+            # 执行函数并获取结果
+            logger.debug(
+                f"❌ 缓存未命中: {func.__name__} (key: {cache_key[:8]}...), 执行函数"
+            )
+            result = await func(*args, **kwargs)
+
+            # 保存结果到缓存
+            if result is not None:
+                cache_path.mkdir(parents=True, exist_ok=True)
+                if result_type == "binary":
+                    cache_file.write_bytes(result)
+                else:
+                    cache_file.write_text(str(result), encoding="utf-8")
+                logger.debug(f"📝 结果已缓存至: {cache_file}")
+
+            return result
+
+        return wrapper
+
+    return decorator
 </file>
 
 <file path="app/pipeline.py">
@@ -855,25 +1170,6 @@ class Pipeline:
         self.process_executor.shutdown()
 </file>
 
-<file path=".gitignore">
-# Python-generated files
-__pycache__/
-*.py[oc]
-build/
-dist/
-wheels/
-*.egg-info
-
-# Virtual environments
-.venv
-data
-
-.mp4
-.env
-
-prompt_history
-</file>
-
 <file path="run.py">
 # run.py
 import asyncio
@@ -966,200 +1262,6 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-</file>
-
-<file path="app/stages/assets.py">
-# app/stages/assets.py
-import io
-import os
-import asyncio
-from pathlib import Path
-from concurrent.futures import ProcessPoolExecutor
-
-# v2.x: Import specific classes, avoid moviepy.editor
-from moviepy.video.VideoClip import ImageClip
-from moviepy.audio.io.AudioFileClip import AudioFileClip
-from moviepy.video.compositing.CompositeVideoClip import CompositeVideoClip
-from PIL import Image  # Still needed for image processing in _generate_image_asset
-from loguru import logger
-
-from ..config import settings
-from ..models import Shot
-from ..services.image_provider import PollinationsImageGenerator
-from ..services.audio_provider import EdgeTTSAudioGenerator
-
-# Instantiate service providers
-image_generator = PollinationsImageGenerator()
-audio_generator = EdgeTTSAudioGenerator()
-
-
-# --- Image Generation (Now uses the service provider) ---
-async def _generate_image_asset(shot: Shot, book_path: Path) -> Shot:
-    """生成单个镜头的图片资产"""
-    if shot.error:
-        return shot
-
-    image_dir = book_path / "images" / str(shot.chapter_index)
-    image_dir.mkdir(parents=True, exist_ok=True)
-    shot.image_path = image_dir / f"{shot.shot_id}.jpg"
-
-    if shot.image_path.exists():
-        logger.debug(f"Image already exists for shot {shot.get_full_id()}, skipping generation.")
-        return shot
-
-    logger.debug(f"Generating image for shot {shot.get_full_id()}...")
-    try:
-        if not shot.image_prompt:
-            raise ValueError("Image prompt is missing.")
-
-        image_data = await image_generator.generate(shot.image_prompt)
-
-        with Image.open(io.BytesIO(image_data)) as img:
-            img.convert("RGB").save(shot.image_path, "JPEG", quality=95)
-    except Exception as e:
-        shot.error = f"Image generation failed: {e}"
-        logger.error(f"Shot {shot.get_full_id()} failed during image generation: {e}")
-
-    return shot
-
-
-# --- Audio Generation (Now uses the service provider) ---
-async def _generate_audio_asset(shot: Shot, book_path: Path) -> Shot:
-    """生成单个镜头的音频资产"""
-    if shot.error:
-        return shot
-
-    audio_dir = book_path / "audio" / str(shot.chapter_index)
-    audio_dir.mkdir(parents=True, exist_ok=True)
-    shot.audio_path = audio_dir / f"{shot.shot_id}.mp3"
-    shot.srt_path = shot.audio_path.with_suffix(".srt")  # srt logic to be added later
-
-    if shot.audio_path.exists():
-        logger.debug(f"Audio already exists for shot {shot.get_full_id()}, skipping generation.")
-        return shot
-
-    logger.debug(f"Generating audio for shot {shot.get_full_id()}...")
-    try:
-        if not shot.original_text:
-            raise ValueError("Original text for audio is missing.")
-
-        audio_data = await audio_generator.generate(shot.original_text, settings.edge_tts_voice)
-
-        shot.audio_path.write_bytes(audio_data)
-        # Placeholder for srt generation
-        shot.srt_path.write_text("")
-    except Exception as e:
-        shot.error = f"Audio generation failed: {e}"
-        logger.error(f"Shot {shot.get_full_id()} failed during audio generation: {e}")
-
-    return shot
-
-
-# --- Video Clip Generation (CPU-Bound) ---
-def _generate_video_clip_asset_sync(shot: Shot, book_path: Path) -> Shot:
-    """
-    [同步函数] 为单个镜头合成视频片段。
-    这个函数将在一个单独的进程中运行，以避免阻塞事件循环。
-    """
-    # v2.x: No longer need monkey-patch, MoviePy 2.x natively supports Pillow 10+
-
-    if shot.error or not shot.image_path or not shot.audio_path:
-        logger.warning(
-            f"Skipping video clip for shot {shot.get_full_id()} due to previous errors or missing assets."
-        )
-        return shot
-
-    video_dir = book_path / "video" / str(shot.chapter_index)
-    video_dir.mkdir(parents=True, exist_ok=True)
-    shot.video_clip_path = video_dir / f"{shot.shot_id}.mp4"
-
-    if shot.video_clip_path.exists():
-        logger.debug(f"Video clip exists for shot {shot.get_full_id()}, skipping.")
-        return shot
-
-    logger.debug(f"Synthesizing video for shot {shot.get_full_id()}...")
-    try:
-        # Validate assets exist before processing
-        if not shot.audio_path.exists() or not shot.image_path.exists():
-            raise FileNotFoundError(f"Missing audio or image file for shot {shot.get_full_id()}")
-
-        # Use compatible API while removing monkey-patch
-        with AudioFileClip(str(shot.audio_path)) as audio_clip:
-            final_size = (settings.video_width, settings.video_height)
-
-            # Create image clip with duration matching audio
-            image_clip: ImageClip = ImageClip(str(shot.image_path)).with_duration(
-                audio_clip.duration
-            )
-
-            # Simple zoom-in effect (Ken Burns) with method chaining where possible
-            # Resize image to be slightly larger than final dimensions for zoom
-            zoomed_image: ImageClip = image_clip.resized(
-                height=int(final_size[1] * 1.15)
-            ).with_position(("center", "center"))
-
-            # Animate the zoom over the duration of the clip
-            final_video = zoomed_image.resized(
-                lambda t: 1 + 0.15 * (1 - t / audio_clip.duration)
-            ).with_position(("center", "center"))
-
-            # Compose video with audio
-            final_clip = CompositeVideoClip([final_video], size=final_size)
-            final_clip = final_clip.with_audio(audio_clip)
-
-            final_clip.write_videofile(
-                str(shot.video_clip_path),
-                fps=24,
-                codec="libx264",  # Use a more compatible encoder
-                threads=os.cpu_count() or 2,
-                logger=None,
-                preset="ultrafast",  # Prioritize speed over quality for clip generation
-            )
-    except Exception as e:
-        shot.error = f"Video synthesis failed: {e}"
-        logger.exception(f"Shot {shot.get_full_id()} failed during video synthesis")
-
-    return shot
-
-
-# --- Main Orchestrator ---
-async def generate_all_assets(
-    shots: list[Shot], book_path: Path, process_executor: ProcessPoolExecutor
-) -> list[Shot]:
-    """
-    资产生成阶段的主函数。
-    并发生成所有镜头的图片和音频，然后将视频合成任务分派到进程池。
-    """
-    # 步骤 1: 并发生成所有I/O密集型资产（图片和音频）
-    logger.info(
-        f"Starting parallel generation of I/O-bound assets (image, audio) for {len(shots)} shots..."
-    )
-
-    # We create image and audio tasks separately to handle potential errors gracefully
-    image_tasks = [_generate_image_asset(shot, book_path) for shot in shots]
-    audio_tasks = [_generate_audio_asset(shot, book_path) for shot in shots]
-
-    # Await both sets of I/O tasks
-    await asyncio.gather(*image_tasks, *audio_tasks)
-
-    # 步骤 2: 将CPU密集型任务（视频合成）提交到进程池
-    logger.info("Scheduling CPU-bound assets (video clips) to process pool...")
-    loop = asyncio.get_event_loop()
-    cpu_tasks = []
-    for shot in shots:
-        # run_in_executor 在一个指定的执行器（这里是进程池）中运行函数
-        task = loop.run_in_executor(
-            process_executor,
-            _generate_video_clip_asset_sync,  # 必须是同步函数
-            shot,
-            book_path,
-        )
-        cpu_tasks.append(task)
-
-    # 等待所有视频片段合成任务完成
-    processed_shots = await asyncio.gather(*cpu_tasks)
-
-    return list(processed_shots)
 </file>
 
 <file path="app/stages/finalizer.py">
@@ -1583,90 +1685,6 @@ async def create_storyboard_for_chapters(chapters: list[Chapter], book_path: Pat
         f"Storyboard and prompting stage complete. Total shots created: {len(all_shots)}"
     )
     return all_shots
-</file>
-
-<file path="app/cache.py">
-# app/cache.py
-import json
-import pickle
-import hashlib
-from pathlib import Path
-from typing import Callable
-from functools import wraps
-
-from .config import settings
-from loguru import logger
-
-
-def _generate_cache_key(func: Callable, *args, **kwargs) -> str:
-    """根据函数和参数生成一个确定性的哈希键"""
-    # 将args和kwargs合并并排序，以确保确定性
-    # 使用json.dumps进行序列化，可以处理大部分内置类型
-    # sort_keys=True保证了字典键的顺序
-    # default=str处理了无法直接序列化为JSON的对象（如Path对象）
-    try:
-        payload = {
-            "args": args,
-            "kwargs": kwargs,
-        }
-        serialized_data = json.dumps(payload, sort_keys=True, default=str).encode(
-            "utf-8"
-        )
-    except TypeError:
-        # 对于更复杂或不可序列化为JSON的对象，使用pickle作为后备方案
-        # 注意：pickle的输出可能因Python版本而异，但对于一个稳定环境是可靠的
-        payload = (args, kwargs)
-        serialized_data = pickle.dumps(payload)
-
-    # 使用SHA256生成哈希值
-    return hashlib.sha256(serialized_data).hexdigest()
-
-
-def cache(cache_path: Path, result_type: str = "text"):
-    """
-    一个通用的缓存装饰器，可缓存函数结果到文件。
-    支持文本和二进制两种模式。
-
-    :param cache_path: 缓存文件的存储目录 (e.g., settings.paths.cache_llm)
-    :param result_type: 'text' 或 'binary'
-    """
-
-    def decorator(func: Callable) -> Callable:
-        @wraps(func)
-        async def wrapper(*args, **kwargs):
-            cache_key = _generate_cache_key(func, *args, **kwargs)
-            cache_file = cache_path / f"{func.__name__}_{cache_key}"
-
-            # 检查缓存是否存在
-            if cache_file.exists():
-                logger.debug(
-                    f"✅ 缓存命中: {func.__name__} (key: {cache_key[:8]}...), 从 {cache_file} 读取"
-                )
-                if result_type == "binary":
-                    return cache_file.read_bytes()
-                else:
-                    return cache_file.read_text(encoding="utf-8")
-
-            # 执行函数并获取结果
-            logger.debug(
-                f"❌ 缓存未命中: {func.__name__} (key: {cache_key[:8]}...), 执行函数"
-            )
-            result = await func(*args, **kwargs)
-
-            # 保存结果到缓存
-            if result is not None:
-                cache_path.mkdir(parents=True, exist_ok=True)
-                if result_type == "binary":
-                    cache_file.write_bytes(result)
-                else:
-                    cache_file.write_text(str(result), encoding="utf-8")
-                logger.debug(f"📝 结果已缓存至: {cache_file}")
-
-            return result
-
-        return wrapper
-
-    return decorator
 </file>
 
 <file path="app/config.py">
