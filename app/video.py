@@ -1,6 +1,6 @@
 import PIL.Image
 import numpy as np
-from moviepy import ImageClip, AudioFileClip, CompositeVideoClip
+from moviepy.editor import ImageClip, AudioFileClip, CompositeVideoClip
 import os
 import tempfile
 import time
