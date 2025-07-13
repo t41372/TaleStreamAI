@@ -1,0 +1,1325 @@
+diff --git a/app/llm_client.py b/app/llm_client.py
+index acebf65..2059159 100644
+--- a/app/llm_client.py
++++ b/app/llm_client.py
+@@ -3,481 +3,130 @@
+ 支持OpenAI兼容的API接口，包含异步并发支持
+ """
+ 
+-import os
+-import time
++import sys
+ import asyncio
+-from typing import Optional, Dict, Any, List
+-from dotenv import load_dotenv
+-from openai import OpenAI, AsyncOpenAI
+-from .logger import log_api_start, log_api_success, log_api_error, log_debug, log_info
+-
+-load_dotenv(override=True)
+-
+-
+-class LLMClient:
+-    """統一的大模型客戶端類，支持同步和異步調用"""
+-
+-    def __init__(
+-        self,
+-        api_key: Optional[str] = None,
+-        base_url: Optional[str] = None,
+-        model: Optional[str] = None,
+-        client_type: str = "default",
+-        timeout: Optional[float] = None,
+-    ):
+-        """
+-        初始化LLM客戶端
+-
+-        Args:
+-            api_key: API密鑰
+-            base_url: API基礎URL
+-            model: 模型名稱
+-            client_type: 客戶端類型，用於從環境變量獲取配置
+-            timeout: 請求超時時間
+-        """
+-        self.client_type = client_type
+-        self.api_key = api_key or self._get_env_key()
+-        self.base_url = base_url or self._get_env_url()
+-        self.model = model or self._get_env_model()
+-        self.timeout = timeout or float(os.getenv("LLM_TIMEOUT", "120"))
+-        self.retry_attempts = int(os.getenv("LLM_RETRY_ATTEMPTS", "3"))
+-
+-        if not self.api_key:
+-            raise ValueError(f"API Key not found for client type: {client_type}")
+-
+-        log_debug(
+-            f"初始化 {client_type} 客戶端",
+-            extra={"model": self.model, "base_url": self.base_url},
++import json
++from typing import AsyncIterator, Any
++
++from openai import AsyncOpenAI, APIError, APIConnectionError, RateLimitError, AsyncStream
++from openai.types.chat import ChatCompletionChunk, ChatCompletionMessageParam
++
++from .config import LLMConfig, settings
++from .logger import log_error, log_info, log_debug
++from .cache import llm_cache
++
++class UnifiedLLMClient:
++    def __init__(self, config: LLMConfig):
++        self.config = config
++        self.client = AsyncOpenAI(
++            api_key=config.api_key,
++            base_url=config.base_url,
++            timeout=config.timeout,
+         )
+-
+-        # 同步客戶端
+-        self.client = OpenAI(api_key=self.api_key, base_url=self.base_url, timeout=self.timeout)
+-
+-        # 異步客戶端
+-        self.async_client = AsyncOpenAI(
+-            api_key=self.api_key, base_url=self.base_url, timeout=self.timeout
+-        )
+-
+-    def _get_env_key(self) -> Optional[str]:
+-        """從環境變量獲取API密鑰"""
+-        if self.client_type == "storyboard":
+-            return (
+-                os.getenv("STORYBOARD_API_KEY")
+-                or os.getenv("GEMINI_API_KEY")
+-                or os.getenv("AL_API_KEY")
+-            )
+-        elif self.client_type == "prompt":
+-            return (
+-                os.getenv("PROMPT_API_KEY")
+-                or os.getenv("AL_API_KEY")
+-                or os.getenv("GEMINI_API_KEY")
+-            )
+-        else:
+-            return (
+-                os.getenv("AL_API_KEY")
+-                or os.getenv("GEMINI_API_KEY")
+-                or os.getenv("STORYBOARD_API_KEY")
+-            )
+-
+-    def _get_env_url(self) -> Optional[str]:
+-        """從環境變量獲取API URL"""
+-        if self.client_type == "storyboard":
+-            return (
+-                os.getenv("STORYBOARD_API_URL")
+-                or os.getenv("GEMINI_API_URL")
+-                or os.getenv("AL_API_URL")
+-            )
+-        elif self.client_type == "prompt":
+-            return (
+-                os.getenv("PROMPT_API_URL")
+-                or os.getenv("AL_API_URL")
+-                or os.getenv("GEMINI_API_URL")
+-            )
+-        else:
+-            return (
+-                os.getenv("AL_API_URL")
+-                or os.getenv("GEMINI_API_URL")
+-                or os.getenv("STORYBOARD_API_URL")
+-            )
+-
+-    def _get_env_model(self) -> str:
+-        """從環境變量獲取模型名稱"""
+-        if self.client_type == "storyboard":
+-            return os.getenv("STORYBOARD_MODEL", "gemini-2.0-flash")
+-        elif self.client_type == "prompt":
+-            # 根據API URL自動選擇合適的模型
+-            url = self._get_env_url()
+-            if url and "dashscope.aliyuncs.com" in url:
+-                return os.getenv("PROMPT_MODEL", "deepseek-v3")
+-            elif url and "generativelanguage.googleapis.com" in url:
+-                return os.getenv("PROMPT_MODEL", "gemini-2.0-flash")
+-            else:
+-                return os.getenv("PROMPT_MODEL", "gemini-2.0-flash")
+-        else:
+-            return os.getenv("STORYBOARD_MODEL", "gemini-2.0-flash")
+-
+-    def chat_completion(
+-        self,
+-        messages: list,
+-        model: Optional[str] = None,
+-        stream: bool = False,
+-        **kwargs,
+-    ) -> Any:
++        self.semaphore = asyncio.Semaphore(settings.max_llm_threads)
++
++    @llm_cache
++    async def _cached_chat_completion(self, messages_json: str, system: str) -> str:
++        """内部缓存方法，只用于非流式调用"""
++        full_response = ""
++        # The messages are passed as a JSON string to be hashable by the cache decorator.
++        # We need to load them back into a list of dictionaries here.
++        messages = json.loads(messages_json)
++        async for chunk in self._stream_implementation(messages, system):
++            full_response += chunk
++        return full_response
++
++    async def chat_completion(self, messages: list[dict[str, Any]], system: str = "") -> str:
+         """
+-        執行聊天完成請求
+-
+-        Args:
+-            messages: 消息列表
+-            model: 模型名稱，如果不提供則使用默認模型
+-            stream: 是否使用流式響應
+-            **kwargs: 其他參數
+-
+-        Returns:
+-            API響應或流式響應生成器
++        执行非流式聊天补全，利用缓存。
+         """
+-        model = model or self.model
+-
+-        log_api_start(f"{self.client_type.upper()}_LLM", endpoint=self.base_url, model=model)
+-
+-        start_time = time.time()
+-
+-        for attempt in range(self.retry_attempts):
+-            try:
+-                response = self.client.chat.completions.create(
+-                    model=model, messages=messages, stream=stream, **kwargs
+-                )
+-
+-                duration = time.time() - start_time
+-                log_api_success(
+-                    f"{self.client_type.upper()}_LLM",
+-                    duration=duration,
+-                    details=f"嘗試次數: {attempt + 1}",
+-                )
+-
+-                return response
+-
+-            except Exception as e:
+-                log_api_error(f"{self.client_type.upper()}_LLM", str(e), retry_count=attempt + 1)
+-
+-                if attempt == self.retry_attempts - 1:
+-                    raise
+-
+-                # 指數退避重試
+-                wait_time = 2**attempt
+-                log_debug(f"等待 {wait_time}s 後重試...")
+-                time.sleep(wait_time)
+-
+-        raise Exception(f"LLM API調用失敗，已重試 {self.retry_attempts} 次")
+-
+-    async def async_chat_completion(
+-        self,
+-        messages: list,
+-        model: Optional[str] = None,
+-        stream: bool = False,
+-        **kwargs,
+-    ) -> Any:
++        log_debug(f"Executing non-streamed chat completion for model {self.config.model}")
++        # We dump the messages to a JSON string because a list of dicts is not hashable,
++        # which is required by our caching decorator.
++        messages_json = json.dumps(messages)
++        return await self._cached_chat_completion(messages_json, system=system)
++        
++    async def chat_completion_stream(
++        self, messages: list[dict[str, Any]], system: str = ""
++    ) -> AsyncIterator[str]:
+         """
+-        異步執行聊天完成請求
+-
+-        Args:
+-            messages: 消息列表
+-            model: 模型名稱，如果不提供則使用默認模型
+-            stream: 是否使用流式響應
+-            **kwargs: 其他參數
+-
+-        Returns:
+-            API響應或流式響應生成器
++        执行异步流式聊天补全，带信号量控制。
+         """
+-        model = model or self.model
+-
+-        log_api_start(f"ASYNC_{self.client_type.upper()}_LLM", endpoint=self.base_url, model=model)
+-
+-        start_time = time.time()
+-
+-        for attempt in range(self.retry_attempts):
+-            try:
+-                response = await self.async_client.chat.completions.create(
+-                    model=model, messages=messages, stream=stream, **kwargs
+-                )
+-
+-                duration = time.time() - start_time
+-                log_api_success(
+-                    f"ASYNC_{self.client_type.upper()}_LLM",
+-                    duration=duration,
+-                    details=f"嘗試次數: {attempt + 1}",
+-                )
+-
+-                return response
+-
+-            except Exception as e:
+-                log_api_error(
+-                    f"ASYNC_{self.client_type.upper()}_LLM",
+-                    str(e),
+-                    retry_count=attempt + 1,
+-                )
+-
+-                if attempt == self.retry_attempts - 1:
+-                    raise
+-
+-                # 異步指數退避重試
+-                wait_time = 2**attempt
+-                log_debug(f"異步等待 {wait_time}s 後重試...")
+-                await asyncio.sleep(wait_time)
+-
+-        raise Exception(f"異步LLM API調用失敗，已重試 {self.retry_attempts} 次")
+-
+-    def chat_completion_stream(self, messages: list, model: Optional[str] = None, **kwargs) -> Any:
++        async with self.semaphore:
++            log_debug(f"Semaphore acquired for {self.config.model}. Executing stream...")
++            async for chunk in self._stream_implementation(messages, system):
++                yield chunk
++
++    async def _stream_implementation(
++        self, messages: list[dict[str, Any]], system: str
++    ) -> AsyncIterator[str]:
+         """
+-        執行流式聊天完成請求
+-
+-        Args:
+-            messages: 消息列表
+-            model: 模型名稱，如果不提供則使用默認模型
+-            **kwargs: 其他參數
+-
+-        Returns:
+-            流式響應生成器
++        核心流式实现，包含详细日志和用户反馈。
+         """
+-        model = model or self.model
+-        return self.client.chat.completions.create(
+-            model=model, messages=messages, stream=True, **kwargs
+-        )
+-
+-    def test_connection(self) -> bool:
+-        """測試API連接"""
++        log_debug(f"System prompt: {system}")
++        
++        # OpenAI的SDK类型检查很严格，这里进行转换
++        final_messages: list[ChatCompletionMessageParam] = messages # type: ignore
++        if system:
++            final_messages.insert(0, {"role": "system", "content": system})
++
++        stream: AsyncStream[ChatCompletionChunk] | None = None
+         try:
+-            log_api_start(f"{self.client_type.upper()}_CONNECTION_TEST")
+-            start_time = time.time()
+-
+-            response = self.chat_completion(
+-                messages=[{"role": "user", "content": '測試連接，請回復：{"test": "success"}'}]
++            stream = await self.client.chat.completions.create(
++                model=self.config.model,
++                messages=final_messages,
++                stream=True,
++                temperature=0.5,
+             )
+-            content = response.choices[0].message.content
+-
+-            duration = time.time() - start_time
+-            success = "test" in content.lower() and "success" in content.lower()
+-
+-            if success:
+-                log_api_success(f"{self.client_type.upper()}_CONNECTION_TEST", duration)
+-            else:
+-                log_api_error(
+-                    f"{self.client_type.upper()}_CONNECTION_TEST",
+-                    f"響應內容不符合預期: {content}",
+-                )
+-
+-            return success
+-
+-        except Exception as e:
+-            log_api_error(f"{self.client_type.upper()}_CONNECTION_TEST", str(e))
+-            return False
+-
+-    async def async_test_connection(self) -> bool:
+-        """異步測試API連接"""
+-        try:
+-            log_api_start(f"ASYNC_{self.client_type.upper()}_CONNECTION_TEST")
+-            start_time = time.time()
+-
+-            response = await self.async_chat_completion(
+-                messages=[{"role": "user", "content": '測試連接，請回復：{"test": "success"}'}]
+-            )
+-            content = response.choices[0].message.content
+-
+-            duration = time.time() - start_time
+-            success = "test" in content.lower() and "success" in content.lower()
+-
+-            if success:
+-                log_api_success(f"ASYNC_{self.client_type.upper()}_CONNECTION_TEST", duration)
+-            else:
+-                log_api_error(
+-                    f"ASYNC_{self.client_type.upper()}_CONNECTION_TEST",
+-                    f"響應內容不符合預期: {content}",
+-                )
+-
+-            return success
+-
+-        except Exception as e:
+-            log_api_error(f"ASYNC_{self.client_type.upper()}_CONNECTION_TEST", str(e))
+-            return False
+-
+-
+-# 並發信號量控制
+-_llm_semaphore = None
+-
+-
+-def get_llm_semaphore():
+-    """獲取LLM並發控制信號量"""
+-    global _llm_semaphore
+-    if _llm_semaphore is None:
+-        max_concurrent = int(os.getenv("LLM_THREADS", "3"))
+-        _llm_semaphore = asyncio.Semaphore(max_concurrent)
+-        log_info(f"初始化LLM並發控制，最大並發數: {max_concurrent}")
+-    return _llm_semaphore
+-
+-
+-async def async_chat_with_semaphore(
+-    client: LLMClient, messages: list, worker_id: Optional[str] = None, **kwargs
+-) -> Any:
+-    """
+-    使用信號量控制的異步聊天完成請求
+-
+-    Args:
+-        client: LLM客戶端
+-        messages: 消息列表
+-        worker_id: 工作者ID（用於日誌追蹤）
+-        **kwargs: 其他參數
+-
+-    Returns:
+-        API響應
+-    """
+-    semaphore = get_llm_semaphore()
+-
+-    log_debug(f"等待 LLM 並發許可 | 工作者: {worker_id or 'unknown'}")
+-
+-    async with semaphore:
+-        log_debug(f"獲得 LLM 並發許可 | 工作者: {worker_id or 'unknown'}")
+-
+-        try:
+-            response = await client.async_chat_completion(messages=messages, **kwargs)
+-
+-            log_debug(f"釋放 LLM 並發許可 | 工作者: {worker_id or 'unknown'}")
+-            return response
+-
+-        except Exception as e:
+-            log_debug(f"LLM 調用失敗，釋放並發許可 | 工作者: {worker_id or 'unknown'}")
+-            raise
+-
+-
+-async def batch_async_chat_completion(
+-    client: LLMClient,
+-    messages_list: List[list],
+-    worker_prefix: str = "worker",
+-    **kwargs,
+-) -> List[Any]:
+-    """
+-    批量異步執行聊天完成請求
+-
+-    Args:
+-        client: LLM客戶端
+-        messages_list: 消息列表的列表
+-        worker_prefix: 工作者ID前綴
+-        **kwargs: 其他參數
+-
+-    Returns:
+-        API響應列表
+-    """
+-    log_info(f"開始批量異步LLM調用，任務數量: {len(messages_list)}")
+-
+-    tasks = []
+-    for i, messages in enumerate(messages_list):
+-        worker_id = f"{worker_prefix}_{i + 1}"
+-        task = async_chat_with_semaphore(
+-            client=client, messages=messages, worker_id=worker_id, **kwargs
+-        )
+-        tasks.append(task)
+-
+-    # 執行所有任務
+-    start_time = time.time()
+-    results = await asyncio.gather(*tasks, return_exceptions=True)
+-    duration = time.time() - start_time
+-
+-    # 處理結果
+-    successful_results = []
+-    failed_count = 0
+-
+-    for i, result in enumerate(results):
+-        if isinstance(result, Exception):
+-            log_api_error(f"BATCH_LLM", f"任務 {i + 1} 失敗: {str(result)}")
+-            failed_count += 1
+-        else:
+-            successful_results.append(result)
+-
+-    success_count = len(successful_results)
+-    log_info(
+-        f"批量LLM調用完成 | 成功: {success_count} | 失敗: {failed_count} | 總耗時: {duration:.2f}s"
+-    )
+-
+-    return successful_results
+-
+-
+-def get_storyboard_client() -> LLMClient:
+-    """獲取分鏡生成客戶端"""
+-    return LLMClient(client_type="storyboard")
+-
+-
+-def get_prompt_client() -> LLMClient:
+-    """獲取提示詞生成客戶端"""
+-    return LLMClient(client_type="prompt")
+-
+-
+-def get_default_client() -> LLMClient:
+-    """獲取默認客戶端"""
+-    return LLMClient(client_type="default")
+-
+-
+-def test_all_connections() -> Dict[str, bool]:
+-    """測試所有配置的API連接"""
+-    log_info("開始測試所有LLM API連接...")
+-    results = {}
+-
+-    try:
+-        storyboard_client = get_storyboard_client()
+-        results["storyboard"] = storyboard_client.test_connection()
+-    except Exception as e:
+-        log_api_error("STORYBOARD_INIT", f"分鏡模型客戶端初始化失敗: {e}")
+-        results["storyboard"] = False
+-
+-    try:
+-        prompt_client = get_prompt_client()
+-        results["prompt"] = prompt_client.test_connection()
+-    except Exception as e:
+-        log_api_error("PROMPT_INIT", f"提示詞模型客戶端初始化失敗: {e}")
+-        results["prompt"] = False
+-
+-    success_count = sum(results.values())
+-    total_count = len(results)
+-    log_info(f"API連接測試完成 | 成功: {success_count}/{total_count}")
+-
+-    return results
+-
+-
+-async def async_test_all_connections() -> Dict[str, bool]:
+-    """異步測試所有配置的API連接"""
+-    log_info("開始異步測試所有LLM API連接...")
+-    results = {}
+-
+-    tasks = []
+-    clients = {}
+-
+-    try:
+-        storyboard_client = get_storyboard_client()
+-        clients["storyboard"] = storyboard_client
+-        tasks.append(("storyboard", storyboard_client.async_test_connection()))
+-    except Exception as e:
+-        log_api_error("ASYNC_STORYBOARD_INIT", f"分鏡模型客戶端初始化失敗: {e}")
+-        results["storyboard"] = False
+-
+-    try:
+-        prompt_client = get_prompt_client()
+-        clients["prompt"] = prompt_client
+-        tasks.append(("prompt", prompt_client.async_test_connection()))
+-    except Exception as e:
+-        log_api_error("ASYNC_PROMPT_INIT", f"提示詞模型客戶端初始化失敗: {e}")
+-        results["prompt"] = False
+-
+-    # 執行異步測試
+-    if tasks:
+-        test_results = await asyncio.gather(*[task[1] for task in tasks], return_exceptions=True)
+-
+-        for i, (client_type, _) in enumerate(tasks):
+-            result = test_results[i]
+-            if isinstance(result, Exception):
+-                log_api_error(f"ASYNC_{client_type.upper()}_TEST", str(result))
+-                results[client_type] = False
+-            else:
+-                results[client_type] = result
+-
+-    success_count = sum(results.values())
+-    total_count = len(results)
+-    log_info(f"異步API連接測試完成 | 成功: {success_count}/{total_count}")
+-
+-    return results
++            # 用户反馈开始
++            sys.stdout.write(f"LLM ({self.config.model}): ")
++            sys.stdout.flush()
++
++            async for chunk in stream:
++                # 检查是否有 'reasoning' (某些模型支持)
++                if (
++                    hasattr(chunk.choices[0].delta, "tool_calls") # Groq/OpenAI reasoning in tool_calls
++                    and chunk.choices[0].delta.tool_calls
++                ):
++                    sys.stdout.write('.')
++                    sys.stdout.flush()
++
++                if content := chunk.choices[0].delta.content:
++                    sys.stdout.write('*')
++                    sys.stdout.flush()
++                    yield content
++            
++            # 用户反馈结束
++            sys.stdout.write("\n")
++            sys.stdout.flush()
++
++        except (APIConnectionError, RateLimitError, APIError) as e:
++            log_error(f"LLM API Error for model {self.config.model}: {e}")
++            # 在流中产生一个错误信息，让下游知道
++            yield f"ERROR: LLM call failed. {e}"
++        finally:
++            if stream:
++                await stream.close()
++                log_debug("LLM Stream closed.")
++
++# 全局客户端实例
++storyboard_client = UnifiedLLMClient(settings.storyboard_llm)
++prompt_client = UnifiedLLMClient(settings.prompt_llm)
++
++async def test_llm_connections():
++    log_info("Testing LLM connections...")
++    test_messages = [{"role": "user", "content": "Hello!"}]
++    
++    log_info("Testing Storyboard Client...")
++    storyboard_response = await storyboard_client.chat_completion(test_messages)
++    if "ERROR" in storyboard_response:
++        log_error("Storyboard client test FAILED.")
++    else:
++        log_info(f"Storyboard client test OK. Response: {storyboard_response[:50]}...")
++
++    log_info("Testing Prompt Client...")
++    prompt_response = await prompt_client.chat_completion(test_messages)
++    if "ERROR" in prompt_response:
++        log_error("Prompt client test FAILED.")
++    else:
++        log_info(f"Prompt client test OK. Response: {prompt_response[:50]}...")
+diff --git a/run_workflow.py b/run_workflow.py
+deleted file mode 100644
+index 856a09b..0000000
+--- a/run_workflow.py
++++ /dev/null
+@@ -1,340 +0,0 @@
+-# run_workflow.py
+-import os
+-import time
+-from pathlib import Path
+-from concurrent.futures import ProcessPoolExecutor, as_completed
+-from tqdm import tqdm
+-from app.main import get_book_content, extract_free_chapters, get_chapter_content
+-from app.board import generate_board
+-from app.image import get_book_images, generate_book_images
+-from app.audio import create_book_audio
+-from app.tts import create_tts
+-from app.video import create_book_video
+-from app.video_end import save_output_video
+-from app.logger import log_info, log_error, log_step_start, log_step_complete
+-
+-
+-# ==============================================================================
+-# 运行配置中心 (在这里修改所有参数)
+-# ==============================================================================
+-class WorkflowConfig:
+-    # --- 基本配置 ---
+-    # 书籍ID或本地文件名。
+-    # 如果是起点ID (如 "1043294775")，程序会从网络获取。
+-    # 如果是本地文件路径 (如 "test_novel.txt")，程序会读取本地文件。
+-    BOOK_SOURCE: str = "test_novel.txt"
+-
+-    # 如果 BOOK_SOURCE 是本地文件名，可以为它指定一个ID。
+-    # 如果留空，将使用文件名作为ID。
+-    CUSTOM_BOOK_ID: str = ""
+-
+-    # --- 分镜生成配置 ---
+-    MAX_CHUNK_TOKENS: int = 16000  # 每个LLM调用块的最大输入token数
+-
+-    # --- 图像生成配置 ---
+-    IMAGE_WIDTH: int = 1440  # 横版视频宽度
+-    IMAGE_HEIGHT: int = 1080  # 横版视频高度
+-
+-    # 用户自定义的全局风格提示词，会附加到每个图片生成提示词的末尾
+-    # 例如: "cinematic, hyper-detailed, photorealistic, 8k"
+-    # 或者: "anime style, studio ghibli, vibrant colors, hand-drawn"
+-    IMAGE_STYLE_PROMPT: str = (
+-        "anime style, dramatic lighting, detailed, illustration, japanese style"
+-    )
+-
+-    # --- 视频生成配置 ---
+-    VIDEO_THREADS: int = 4  # 视频分段生成时的并发线程数
+-
+-    # --- 性能与流程控制 ---
+-    # 设置为 True 以跳过已成功生成的步骤，实现断点续传
+-    SKIP_COMPLETED_STEPS: bool = True
+-
+-    # 设置为 True 以启用基于章节的并行处理
+-    ENABLE_PARALLEL_PROCESSING: bool = True
+-
+-    # 并行处理的最大进程数
+-    MAX_PARALLEL_CHAPTERS: int = 3
+-
+-    # 定义要运行的流程阶段
+-    STEPS_TO_RUN = [
+-        "content",  # 1. 获取和处理小说内容
+-        "board",  # 2. 生成分镜
+-        "prompt",  # 3. 优化提示词
+-        "image",  # 4. 生成图片
+-        "audio",  # 5. 生成音频和字幕
+-        "video_clips",  # 6. 生成视频分片
+-        "final_video",  # 7. 合并最终视频和字幕
+-    ]
+-
+-
+-def process_chapter_pipeline(book_id: str, chapter_index: int, config: WorkflowConfig):
+-    """
+-    处理单个章节的完整流水线（用于并行处理）。
+-    这个函数将在一个独立的进程中运行。
+-    """
+-    try:
+-        # 在子进程中重新导入必要的模块
+-        from app.board import generate_board_json
+-        from app.prompt import process_chapter_file
+-        from app.llm_client import get_storyboard_client
+-        from app.board import split_content_by_tokens
+-        from dotenv import load_dotenv
+-        import json
+-
+-        # 重新加载环境变量
+-        load_dotenv()
+-
+-        log_info(f"▶️ 开始处理章节 {chapter_index} 流水线...")
+-
+-        chapter_file = Path(f"data/book/{book_id}/list/{chapter_index}.txt")
+-        storyboard_file = Path(f"data/book/{book_id}/storyboard/{chapter_index}.json")
+-
+-        # 检查章节文件是否存在
+-        if not chapter_file.exists():
+-            raise Exception(f"章节文件不存在: {chapter_file}")
+-
+-        # 1. 分镜生成
+-        board_success = False
+-        if not storyboard_file.exists():
+-            try:
+-                with open(chapter_file, "r", encoding="utf-8") as f:
+-                    content = f.read()
+-
+-                if not content.strip():
+-                    raise Exception("章节内容为空")
+-
+-                # 设置环境变量
+-                os.environ["MAX_CHUNK_TOKENS"] = str(config.MAX_CHUNK_TOKENS)
+-
+-                # 使用优化的分镜生成逻辑
+-                content_size = len(content)
+-                if content_size > 500:  # 使用分块处理
+-                    log_info(f"章节 {chapter_index} 内容较长，使用分块处理...")
+-                    client = get_storyboard_client()
+-                    client_model_name = client.model
+-                    chunks = split_content_by_tokens(
+-                        content,
+-                        model_name=client_model_name,
+-                        max_tokens=config.MAX_CHUNK_TOKENS,
+-                    )
+-
+-                    chunk_results = []
+-                    for i, chunk in enumerate(chunks):
+-                        try:
+-                            chunk_json = generate_board_json(chunk, use_stream=True)
+-                            if chunk_json:
+-                                chunk_results.append(chunk_json)
+-                        except Exception as e:
+-                            log_error(f"章节 {chapter_index} 块 {i+1} 处理失败: {e}")
+-                            continue
+-
+-                    # 合并结果
+-                    if chunk_results:
+-                        from app.board import merge_json_results
+-
+-                        board_json = merge_json_results(chunk_results)
+-                    else:
+-                        board_json = []
+-                else:
+-                    board_json = generate_board_json(content, use_stream=True)
+-
+-                if not board_json:
+-                    raise Exception("分镜生成失败 - 无有效结果")
+-
+-                # 确保目录存在
+-                storyboard_file.parent.mkdir(parents=True, exist_ok=True)
+-                with open(storyboard_file, "w", encoding="utf-8") as f:
+-                    json.dump(board_json, f, ensure_ascii=False, indent=2)
+-                board_success = True
+-
+-            except Exception as e:
+-                log_error(f"章节 {chapter_index} 分镜生成失败: {e}")
+-                return (chapter_index, f"Board generation failed: {e}")
+-        else:
+-            board_success = True
+-            log_info(f"章节 {chapter_index} 分镜文件已存在，跳过生成")
+-
+-        # 2. 提示词优化
+-        prompt_success = False
+-        if board_success and storyboard_file.exists():
+-            try:
+-                process_chapter_file(
+-                    str(storyboard_file), style_prompt=config.IMAGE_STYLE_PROMPT
+-                )
+-                prompt_success = True
+-            except Exception as e:
+-                log_error(f"章节 {chapter_index} 提示词优化失败: {e}")
+-                return (chapter_index, f"Prompt optimization failed: {e}")
+-
+-        if board_success and prompt_success:
+-            log_info(f"✅ 章节 {chapter_index} 流水线处理完成。")
+-            return (chapter_index, "Success")
+-        else:
+-            return (chapter_index, "Partial failure")
+-
+-    except Exception as e:
+-        log_error(f"❌ 章节 {chapter_index} 流水线处理失败: {e}")
+-        return (chapter_index, f"Failed: {e}")
+-
+-
+-def parallel_process_chapters(book_id: str, config: WorkflowConfig):
+-    """
+-    并行处理所有章节的分镜生成和提示词优化
+-    """
+-    log_step_start("并行处理章节")
+-
+-    # 获取所有需要处理的章节
+-    chapter_dir = Path(f"data/book/{book_id}/list")
+-    if not chapter_dir.exists():
+-        log_error(f"章节目录不存在: {chapter_dir}")
+-        return
+-
+-    chapter_files = sorted(list(chapter_dir.glob("*.txt")), key=lambda x: int(x.stem))
+-    chapter_indices = [int(p.stem) for p in chapter_files]
+-
+-    log_info(f"发现 {len(chapter_indices)} 个章节需要处理")
+-
+-    # 使用进程池并行处理
+-    with ProcessPoolExecutor(max_workers=config.MAX_PARALLEL_CHAPTERS) as executor:
+-        # 提交所有章节任务
+-        future_to_chapter = {
+-            executor.submit(process_chapter_pipeline, book_id, index, config): index
+-            for index in chapter_indices
+-        }
+-
+-        # 收集结果并显示进度
+-        with tqdm(
+-            total=len(chapter_indices), desc="章节并行处理进度", unit="章节"
+-        ) as pbar:
+-            for future in as_completed(future_to_chapter):
+-                try:
+-                    index, status = future.result()
+-                    log_info(f"章节 {index} 处理结果: {status}")
+-                    pbar.update(1)
+-                except Exception as e:
+-                    index = future_to_chapter[future]
+-                    log_error(f"章节 {index} 处理异常: {e}")
+-                    pbar.update(1)
+-
+-    log_step_complete("并行处理章节")
+-
+-
+-def main(config: WorkflowConfig):
+-    """
+-    主工作流函数
+-    """
+-    start_time = time.time()
+-    log_info("🚀 TaleStreamAI 工作流启动...")
+-    log_info(
+-        f"配置: BOOK_SOURCE='{config.BOOK_SOURCE}', BOOK_ID='{config.CUSTOM_BOOK_ID or Path(config.BOOK_SOURCE).stem}'"
+-    )
+-    log_info(f"并行处理: {'启用' if config.ENABLE_PARALLEL_PROCESSING else '禁用'}")
+-
+-    # 确定 book_id 和 local_file
+-    if config.BOOK_SOURCE.endswith(".txt"):
+-        local_file = config.BOOK_SOURCE
+-        book_id = config.CUSTOM_BOOK_ID or Path(local_file).stem
+-    else:
+-        local_file = None
+-        book_id = config.BOOK_SOURCE
+-
+-    # --- 步骤 1: 获取内容 ---
+-    if "content" in config.STEPS_TO_RUN:
+-        log_step_start("1. 内容获取")
+-        book_path = f"data/book/{book_id}/{book_id}.json"
+-        if not (config.SKIP_COMPLETED_STEPS and Path(book_path).exists()):
+-            book = get_book_content(book_id, local_file)
+-            if book:
+-                if not local_file:
+-                    extract_free_chapters(book, book_id)
+-                get_chapter_content(book_id, from_local=bool(local_file))
+-                log_step_complete("1. 内容获取")
+-            else:
+-                log_error("获取书籍内容失败，工作流终止。")
+-                return
+-        else:
+-            log_info("内容已存在，跳过此步骤。")
+-            log_step_complete("1. 内容获取")
+-
+-    # --- 步骤 2 & 3: 分镜生成与提示词优化 ---
+-    if (
+-        "board" in config.STEPS_TO_RUN or "prompt" in config.STEPS_TO_RUN
+-    ) and config.ENABLE_PARALLEL_PROCESSING:
+-        # 使用并行处理
+-        parallel_process_chapters(book_id, config)
+-    else:
+-        # 使用传统的串行处理
+-        if "board" in config.STEPS_TO_RUN:
+-            log_step_start("2. 分镜生成")
+-            os.environ["MAX_CHUNK_TOKENS"] = str(config.MAX_CHUNK_TOKENS)
+-            generate_board(book_id)
+-            log_step_complete("2. 分镜生成")
+-
+-        if "prompt" in config.STEPS_TO_RUN:
+-            log_step_start("3. 提示词优化")
+-            from app.prompt import process_board_files
+-
+-            process_board_files(book_id, style_prompt=config.IMAGE_STYLE_PROMPT)
+-            log_step_complete("3. 提示词优化")
+-
+-    # --- 步骤 4: 生成图片 ---
+-    if "image" in config.STEPS_TO_RUN:
+-        log_step_start("4. 图片生成")
+-        try:
+-            generate_book_images(
+-                book_id, width=config.IMAGE_WIDTH, height=config.IMAGE_HEIGHT
+-            )
+-            get_book_images(book_id)  # 高清修复
+-            log_step_complete("4. 图片生成")
+-        except Exception as e:
+-            log_error(f"图片生成步骤失败: {e}")
+-            log_info("继续处理后续步骤...")
+-
+-    # --- 步骤 5: 生成音频 ---
+-    if "audio" in config.STEPS_TO_RUN:
+-        log_step_start("5. 音频与字幕生成")
+-        try:
+-            create_book_audio(book_id)
+-            create_tts(book_id, os.getcwd())  # 验证字幕
+-            log_step_complete("5. 音频与字幕生成")
+-        except Exception as e:
+-            log_error(f"音频生成步骤失败: {e}")
+-            log_info("继续处理后续步骤...")
+-
+-    # --- 步骤 6: 生成视频分片 ---
+-    if "video_clips" in config.STEPS_TO_RUN:
+-        log_step_start("6. 视频分片生成")
+-        try:
+-            # 把配置写入环境变量，因为 video.py 内部直接读取了环境变量
+-            os.environ["VIDEO_WIDTH"] = str(config.IMAGE_WIDTH)
+-            os.environ["VIDEO_HEIGHT"] = str(config.IMAGE_HEIGHT)
+-            os.environ["VIDEO_THREADS"] = str(config.VIDEO_THREADS)
+-            create_book_video(book_id)
+-            log_step_complete("6. 视频分片生成")
+-        except Exception as e:
+-            log_error(f"视频分片生成步骤失败: {e}")
+-            log_info("继续处理后续步骤...")
+-
+-    # --- 步骤 7: 合成最终视频 ---
+-    if "final_video" in config.STEPS_TO_RUN:
+-        log_step_start("7. 最终视频合成")
+-        try:
+-            save_output_video(book_id)
+-            log_step_complete("7. 最终视频合成")
+-        except Exception as e:
+-            log_error(f"最终视频合成步骤失败: {e}")
+-            log_info("工作流程中存在失败步骤，请检查日志")
+-
+-    total_duration = time.time() - start_time
+-    log_info(f"🎉 全部流程处理完成，总耗时: {total_duration:.2f} 秒。")
+-
+-
+-if __name__ == "__main__":
+-    # 加载.env文件中的环境变量，例如API密钥
+-    from dotenv import load_dotenv
+-
+-    load_dotenv()
+-
+-    # 实例化配置并运行主函数
+-    config = WorkflowConfig()
+-    main(config)
+diff --git a/run_workflow_pipeline.py b/run_workflow_pipeline.py
+deleted file mode 100644
+index 8417d7c..0000000
+--- a/run_workflow_pipeline.py
++++ /dev/null
+@@ -1,369 +0,0 @@
+-# run_workflow_pipeline.py
+-import os
+-import time
+-import json
+-from pathlib import Path
+-from multiprocessing import Process, JoinableQueue, cpu_count
+-from tqdm import tqdm
+-
+-# 从 app 模块导入所有必要的函数和类
+-from app.main import get_book_content, extract_free_chapters, get_chapter_content
+-from app.board import generate_board_json, split_content_by_tokens, get_storyboard_client
+-from app.prompt import refine_prompt, create_client as create_prompt_client
+-from app.image import create_Image, save_image_data
+-from app.audio import generate_audio_async
+-from app.video import create_video_with_moving_image
+-from app.video_end import save_output_video
+-from app.logger import log_info, log_error, log_step_start, log_step_complete, log_warning, log_debug
+-from dotenv import load_dotenv
+-
+-# ==============================================================================
+-# 运行配置中心
+-# ==============================================================================
+-class WorkflowConfig:
+-    BOOK_SOURCE: str = "test_novel.txt"
+-    CUSTOM_BOOK_ID: str = "test2"
+-    MAX_CHUNK_TOKENS: int = 16000
+-    IMAGE_WIDTH: int = 1440  # 竖屏视频宽度 9:16
+-    IMAGE_HEIGHT: int = 768 # 竖屏视频高度
+-    IMAGE_STYLE_PROMPT: str = "cinematic, dramatic lighting, detailed, illustration, anime style, 8k"
+-    
+-    # --- 流水线工作进程数量配置 ---
+-    # 建议 PROMPT_WORKERS = CPU核心数 / 2
+-    PROMPT_WORKERS: int = max(1, cpu_count() // 2)
+-    # 图片生成API不支持并发，固定为1
+-    IMAGE_WORKERS: int = 1
+-    # 音频生成是IO密集型，可以设置多一些
+-    AUDIO_WORKERS: int = max(2, cpu_count())
+-    # 视频合成是CPU/GPU密集型，建议等于CPU核心数
+-    VIDEO_WORKERS: int = max(1, cpu_count() // 2)
+-    
+-# Sentinel object to signal the end of the queue
+-POISON_PILL = None
+-
+-# ==============================================================================
+-# 工作进程定义 (Producers and Consumers)
+-# ==============================================================================
+-
+-def prompt_worker(config: WorkflowConfig, book_id: str, chapter_files: list, prompt_queue: JoinableQueue):
+-    """
+-    Worker 1: 读取章节文本, 生成分镜和提示词, 放入 prompt_queue.
+-    """
+-    try:
+-        log_info(f"[PromptWorker-{os.getpid()}] 启动...")
+-        storyboard_client = get_storyboard_client()
+-        prompt_client = create_prompt_client()
+-
+-        for chapter_file in chapter_files:
+-            try:
+-                chapter_index = chapter_file.stem
+-                log_info(f"[PromptWorker-{os.getpid()}] 正在处理章节 {chapter_index}")
+-                with open(chapter_file, 'r', encoding='utf-8') as f:
+-                    content = f.read()
+-
+-                chunks = split_content_by_tokens(content, storyboard_client.model, config.MAX_CHUNK_TOKENS)
+-                
+-                for i, chunk in enumerate(chunks):
+-                    board_json_list = generate_board_json(chunk, use_stream=True)
+-                    if not board_json_list:
+-                        log_warning(f"章节 {chapter_index} 的块 {i} 未能生成分镜。")
+-                        continue
+-
+-                    for board_item in board_json_list:
+-                        try:
+-                            refined = refine_prompt(
+-                                board_item["text"],
+-                                board_item["lensLanguage_en"],
+-                                prompt_client,
+-                                use_stream=False, # 在多进程中，流式输出会混乱，用非流式
+-                                style_prompt=config.IMAGE_STYLE_PROMPT,
+-                            )
+-                            board_item['lensLanguage_end'] = refined
+-                            task = {
+-                                'book_id': book_id,
+-                                'chapter_index': chapter_index,
+-                                'item': board_item
+-                            }
+-                            prompt_queue.put(task)
+-                        except Exception as e:
+-                            log_error(f"提示词优化失败于章节 {chapter_index}, ID {board_item.get('id')}: {e}")
+-            except Exception as e:
+-                log_error(f"[PromptWorker-{os.getpid()}] 处理章节 {chapter_file.name} 失败: {e}")
+-        log_info(f"[PromptWorker-{os.getpid()}] 完成所有任务, 退出。")
+-    except Exception as e:
+-        log_error(f"[PromptWorker-{os.getpid()}] 发生未捕获异常: {e}")
+-
+-
+-def image_worker(config: WorkflowConfig, prompt_queue: JoinableQueue, image_queue: JoinableQueue):
+-    """
+-    Worker 2: 从 prompt_queue 获取任务, 生成图片, 放入 image_queue.
+-    """
+-    try:
+-        log_info(f"[ImageWorker-{os.getpid()}] 启动...")
+-        while True:
+-            task = prompt_queue.get()
+-            if task is POISON_PILL:
+-                prompt_queue.task_done()
+-                log_info(f"[ImageWorker-{os.getpid()}] 收到毒丸, 退出。")
+-                break
+-            
+-            try:
+-                book_id = task['book_id']
+-                chapter_index = task['chapter_index']
+-                item = task['item']
+-                item_id = item['id']
+-                prompt = item['lensLanguage_end']
+-
+-                image_path = Path(f"data/book/{book_id}/images/{chapter_index}/{item_id}.jpg")
+-                image_path.parent.mkdir(parents=True, exist_ok=True)
+-
+-                log_debug(f"[ImageWorker] 正在生成图片: 章节 {chapter_index}, ID {item_id}")
+-                image_data = create_Image(prompt, config.IMAGE_WIDTH, config.IMAGE_HEIGHT)
+-                save_image_data(image_data, str(image_path))
+-                
+-                task['image_path'] = str(image_path)
+-                image_queue.put(task)
+-            except Exception as e:
+-                log_error(f"[ImageWorker] 图片生成失败: 章节 {task.get('chapter_index')}, ID {task.get('item', {}).get('id')}: {e}")
+-            finally:
+-                prompt_queue.task_done()
+-    except Exception as e:
+-        log_error(f"[ImageWorker-{os.getpid()}] 发生未捕获异常: {e}")
+-
+-def audio_worker(config: WorkflowConfig, image_queue: JoinableQueue, audio_queue: JoinableQueue):
+-    """
+-    Worker 3: 从 image_queue 获取任务, 生成音频, 放入 audio_queue.
+-    """
+-    import asyncio
+-    try:
+-        log_info(f"[AudioWorker-{os.getpid()}] 启动...")
+-
+-        async def process_task(task):
+-            try:
+-                book_id = task['book_id']
+-                chapter_index = task['chapter_index']
+-                item = task['item']
+-                item_id = item['id']
+-                text = item['text']
+-
+-                audio_path = Path(f"data/book/{book_id}/audio/{chapter_index}/{item_id}.mp3")
+-                audio_path.parent.mkdir(parents=True, exist_ok=True)
+-                
+-                log_debug(f"[AudioWorker] 正在生成音频: 章节 {chapter_index}, ID {item_id}")
+-                success = await generate_audio_async(text, str(audio_path), text)
+-                
+-                if success:
+-                    task['audio_path'] = str(audio_path)
+-                    task['srt_path'] = str(audio_path.with_suffix('.srt'))
+-                    audio_queue.put(task)
+-                else:
+-                    raise Exception("EdgeTTS 生成失败")
+-
+-            except Exception as e:
+-                log_error(f"[AudioWorker] 音频生成失败: 章节 {task.get('chapter_index')}, ID {task.get('item', {}).get('id')}: {e}")
+-            finally:
+-                image_queue.task_done()
+-
+-        async def main_loop():
+-            while True:
+-                task = image_queue.get()
+-                if task is POISON_PILL:
+-                    log_info(f"[AudioWorker-{os.getpid()}] 收到毒丸, 退出。")
+-                    break
+-                await process_task(task)
+-
+-        asyncio.run(main_loop())
+-    except Exception as e:
+-        log_error(f"[AudioWorker-{os.getpid()}] 发生未捕获异常: {e}")
+-
+-
+-def video_worker(config: WorkflowConfig, audio_queue: JoinableQueue, video_queue: JoinableQueue):
+-    """
+-    Worker 4: 从 audio_queue 获取任务, 合成视频分片, 放入 video_queue.
+-    """
+-    try:
+-        log_info(f"[VideoWorker-{os.getpid()}] 启动...")
+-        
+-        while True:
+-            task = audio_queue.get()
+-            if task is POISON_PILL:
+-                audio_queue.task_done()
+-                log_info(f"[VideoWorker-{os.getpid()}] 收到毒丸, 退出。")
+-                break
+-            
+-            try:
+-                book_id = task['book_id']
+-                chapter_index = task['chapter_index']
+-                item = task['item']
+-                item_id = item['id']
+-                
+-                video_path = Path(f"data/book/{book_id}/video/{chapter_index}/{item_id}.mp4")
+-                video_path.parent.mkdir(parents=True, exist_ok=True)
+-
+-                log_debug(f"[VideoWorker] 正在合成视频: 章节 {chapter_index}, ID {item_id}")
+-                
+-                create_video_with_moving_image(
+-                    image_path=task['image_path'],
+-                    audio_path=task['audio_path'],
+-                    output_path=str(video_path),
+-                    video_width=config.IMAGE_WIDTH,
+-                    video_height=config.IMAGE_HEIGHT,
+-                    portrait_mode=True, # 竖屏模式
+-                )
+-
+-                task['video_path'] = str(video_path)
+-                video_queue.put(task)
+-
+-            except Exception as e:
+-                log_error(f"[VideoWorker] 视频分片合成失败: 章节 {task.get('chapter_index')}, ID {task.get('item', {}).get('id')}: {e}")
+-            finally:
+-                audio_queue.task_done()
+-    except Exception as e:
+-        log_error(f"[VideoWorker-{os.getpid()}] 发生未捕获异常: {e}")
+-
+-# ==============================================================================
+-# 主工作流函数
+-# ==============================================================================
+-def main(config: WorkflowConfig):
+-    start_time = time.time()
+-    log_info("🚀 TaleStreamAI 流水线工作流启动...")
+-    
+-    # 确定 book_id 和 local_file
+-    if config.BOOK_SOURCE.endswith(".txt"):
+-        local_file = config.BOOK_SOURCE
+-        book_id = config.CUSTOM_BOOK_ID or Path(local_file).stem
+-    else:
+-        local_file = None
+-        book_id = config.BOOK_SOURCE
+-    log_info(f"处理书籍: {book_id}")
+-
+-    # --- 步骤 1: 内容获取 (同步执行) ---
+-    log_step_start("1. 内容获取")
+-    book_path_obj = Path(f"data/book/{book_id}/{book_id}.json")
+-    if not book_path_obj.exists():
+-        book = get_book_content(book_id, local_file)
+-        if book:
+-            if not local_file:
+-                extract_free_chapters(book, book_id)
+-            get_chapter_content(book_id, from_local=bool(local_file))
+-        else:
+-            log_error("获取书籍内容失败，工作流终止。")
+-            return
+-    else:
+-        log_info("内容已存在，跳过获取。")
+-    log_step_complete("1. 内容获取")
+-    
+-    chapter_dir = Path(f"data/book/{book_id}/list")
+-    chapter_files = sorted(list(chapter_dir.glob("*.txt")), key=lambda x: int(x.stem))
+-    total_chapters = len(chapter_files)
+-    
+-    if total_chapters == 0:
+-        log_error("未找到任何章节文件，无法继续。")
+-        return
+-
+-    # --- 步骤 2: 初始化队列和工作进程 ---
+-    log_step_start("2. 初始化流水线")
+-    prompt_queue = JoinableQueue()
+-    image_queue = JoinableQueue()
+-    audio_queue = JoinableQueue()
+-    video_queue = JoinableQueue()
+-
+-    # 将章节文件分发给 Prompt Workers
+-    worker_chapter_files = [[] for _ in range(config.PROMPT_WORKERS)]
+-    for i, chapter_file in enumerate(chapter_files):
+-        worker_chapter_files[i % config.PROMPT_WORKERS].append(chapter_file)
+-    
+-    processes = []
+-    
+-    # 启动 Prompt Workers
+-    for i in range(config.PROMPT_WORKERS):
+-        p = Process(target=prompt_worker, args=(config, book_id, worker_chapter_files[i], prompt_queue))
+-        processes.append(p)
+-        p.start()
+-
+-    # 启动 Image Workers
+-    for _ in range(config.IMAGE_WORKERS):
+-        p = Process(target=image_worker, args=(config, prompt_queue, image_queue))
+-        processes.append(p)
+-        p.start()
+-        
+-    # 启动 Audio Workers
+-    for _ in range(config.AUDIO_WORKERS):
+-        p = Process(target=audio_worker, args=(config, image_queue, audio_queue))
+-        processes.append(p)
+-        p.start()
+-
+-    # 启动 Video Workers
+-    for _ in range(config.VIDEO_WORKERS):
+-        p = Process(target=video_worker, args=(config, audio_queue, video_queue))
+-        processes.append(p)
+-        p.start()
+-        
+-    log_info(f"已启动 {len(processes)} 个工作进程。")
+-    log_step_complete("2. 初始化流水线")
+-
+-    # --- 步骤 3: 监控和结果收集 ---
+-    log_step_start("3. 流水线处理与监控")
+-    
+-    # 估算总任务数（不精确，但可用于进度条）
+-    # 这是一个非常粗略的估算，假设每章20个分镜
+-    estimated_tasks = total_chapters * 20 
+-
+-    pbar = tqdm(total=estimated_tasks, desc="流水线总进度", unit="分镜")
+-    
+-    processed_count = 0
+-    while True:
+-        # 非阻塞地检查结果
+-        if not video_queue.empty():
+-            result_task = video_queue.get()
+-            video_queue.task_done()
+-            pbar.update(1)
+-            processed_count += 1
+-        
+-        # 检查所有进程是否还在运行
+-        active_processes = [p for p in processes if p.is_alive()]
+-        if not active_processes and video_queue.empty():
+-            log_info("所有工作进程已结束且队列为空，退出监控循环。")
+-            break
+-            
+-        time.sleep(1) # 避免CPU空转
+-
+-    pbar.close()
+-    log_step_complete("3. 流水线处理与监控")
+-
+-    # --- 步骤 4: 优雅地关闭流水线 ---
+-    log_step_start("4. 关闭流水线")
+-    # 放入"毒丸"来信号worker退出
+-    for _ in range(config.PROMPT_WORKERS): 
+-        prompt_queue.put(POISON_PILL)
+-    for _ in range(config.IMAGE_WORKERS): 
+-        image_queue.put(POISON_PILL)
+-    for _ in range(config.AUDIO_WORKERS): 
+-        audio_queue.put(POISON_PILL)
+-    for _ in range(config.VIDEO_WORKERS): 
+-        video_queue.put(POISON_PILL)
+-    
+-    # 等待所有进程终止
+-    for p in processes:
+-        p.join(timeout=30) # 等待30秒
+-        if p.is_alive():
+-            log_warning(f"进程 {p.pid} 未能在30秒内正常退出，将强制终止。")
+-            p.terminate()
+-
+-    log_step_complete("4. 关闭流水线")
+-
+-    # --- 步骤 5: 合成最终视频 ---
+-    log_step_start("5. 最终视频合成")
+-    try:
+-        save_output_video(book_id) # save_output_video 内部会重新扫描文件
+-        log_step_complete("5. 最终视频合成")
+-    except Exception as e:
+-        log_error(f"最终视频合成失败: {e}")
+-
+-    total_duration = time.time() - start_time
+-    log_info(f"🎉 全部流程处理完成，总耗时: {total_duration:.2f} 秒。")
+-
+-if __name__ == "__main__":
+-    load_dotenv()
+-    config = WorkflowConfig()
+-    main(config) 
+\ No newline at end of file
