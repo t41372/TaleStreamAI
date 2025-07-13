@@ -1,14 +1,14 @@
-import asyncio
-from dotenv import load_dotenv
 import os
+import asyncio
 import json
-from tqdm import tqdm
-import concurrent.futures
 import time
 import threading
+import concurrent.futures
+from dotenv import load_dotenv
+from tqdm import tqdm
+
 from .edge import generate_audio_with_edge_tts, DEFAULT_VOICE
-from .logger import (log_step_start, log_step_complete, log_progress, log_info,
-                    log_error, log_debug, log_concurrent, log_file_operation)
+from .logger import log_error, log_debug, log_file_operation
 
 # 加载环境变量
 load_dotenv(override=True)
@@ -21,22 +21,22 @@ json_locks = {}
 async def generate_audio_async(text: str, audio_path: str, original_text: str = None) -> bool:
     """
     Use Edge TTS to generate audio asynchronously.
-    
+
     Args:
         text: Text to convert to speech
         audio_path: Path to save audio file
         original_text: Original text with punctuation for subtitle restoration
-        
+
     Returns:
         bool: Success status
     """
     try:
         # Get voice from environment or use default
         voice = os.getenv("EDGE_TTS_VOICE", DEFAULT_VOICE)
-        
+
         log_debug(f"開始生成音頻: {os.path.basename(audio_path)} | 語音: {voice}")
         start_time = time.time()
-        
+
         # Generate audio and subtitles
         subtitle_path = os.path.splitext(audio_path)[0] + ".srt"
         success, _ = await generate_audio_with_edge_tts(
@@ -44,16 +44,16 @@ async def generate_audio_async(text: str, audio_path: str, original_text: str = 
             audio_path=audio_path,
             voice=voice,
             subtitle_path=subtitle_path,
-            original_text=original_text
+            original_text=original_text,
         )
-        
+
         duration = time.time() - start_time
         if success:
             log_file_operation("音頻生成成功", audio_path)
             log_debug(f"音頻生成耗時: {duration:.2f}s")
         else:
             log_error(f"音頻生成失敗: {os.path.basename(audio_path)}")
-        
+
         return success
     except Exception as e:
         log_error(f"Edge TTS 生成失敗: {str(e)}")
@@ -63,12 +63,12 @@ async def generate_audio_async(text: str, audio_path: str, original_text: str = 
 def generate_audio(text: str, audio_path: str, original_text: str = None) -> bool:
     """
     Synchronous wrapper for Edge TTS audio generation.
-    
+
     Args:
-        text: Text to convert to speech  
+        text: Text to convert to speech
         audio_path: Path to save audio file
         original_text: Original text with punctuation for subtitle restoration
-        
+
     Returns:
         bool: Success status
     """
@@ -85,7 +85,7 @@ def update_json_with_audio_path(chapter_file_path, item_id, audio_path):
     with json_locks[chapter_file_path]:
         try:
             log_debug(f"更新JSON文件: {os.path.basename(chapter_file_path)} | ID: {item_id}")
-            
+
             # 读取JSON文件
             with open(chapter_file_path, "r", encoding="utf-8") as f:
                 chapter_data = json.load(f)
@@ -240,11 +240,11 @@ async def create_book_audio_async(book_id: str):
 
     # 创建总进度条和信号量
     semaphore = asyncio.Semaphore(max_concurrent)
-    
+
     with tqdm(total=total_items, desc="总进度", unit="音频") as pbar:
         # 收集所有任务
         tasks = []
-        
+
         # 遍历每个章节文件
         for chapter_file_path in chapter_file_paths:
             try:
@@ -256,7 +256,7 @@ async def create_book_audio_async(book_id: str):
                 for item in chapter_data:
                     task = process_item_async(item, book_id, chapter_file_path, pbar, semaphore)
                     tasks.append(task)
-                    
+
             except Exception as e:
                 logger.error(f"处理章节 {chapter_file_path} 失败：{str(e)}")
 
@@ -269,7 +269,7 @@ def create_book_audio(book_id: str):
     """Main function to create book audio using Edge TTS."""
     # Check if we should use async version
     use_async = os.getenv("USE_ASYNC_AUDIO", "true").lower() == "true"
-    
+
     if use_async:
         # Use async version with concurrency
         asyncio.run(create_book_audio_async(book_id))

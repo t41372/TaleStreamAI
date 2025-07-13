@@ -30,11 +30,11 @@ load_dotenv()
 def load_local_txt_file(file_path: str, book_id: str) -> bool:
     """
     Load a local txt file and process it as a novel.
-    
+
     Args:
         file_path: Path to the local txt file
         book_id: ID to use for the book
-        
+
     Returns:
         bool: Success status
     """
@@ -43,74 +43,82 @@ def load_local_txt_file(file_path: str, book_id: str) -> bool:
         if not file_path.exists():
             print(f"文件不存在: {file_path}")
             return False
-            
+
         # 创建书籍目录
         book_dir = f"data/book/{book_id}"
         os.makedirs(book_dir, exist_ok=True)
         os.makedirs(f"{book_dir}/list", exist_ok=True)
-        
+
         # 读取文本文件
-        with open(file_path, 'r', encoding='utf-8') as f:
+        with open(file_path, "r", encoding="utf-8") as f:
             content = f.read()
-        
+
         # 按章节分割文本（假设章节以"第X章"开头）
-        chapter_pattern = r'(第\d+章[^\n]*)'
+        chapter_pattern = r"(第\d+章[^\n]*)"
         chapters = re.split(chapter_pattern, content)
-        
+
         # 处理章节数据
         chapter_list = []
         chapter_index = 0
-        
+
         for i in range(1, len(chapters), 2):  # 跳过空的分割部分
             if i + 1 < len(chapters):
                 chapter_title = chapters[i].strip()
                 chapter_content = chapters[i + 1].strip()
-                
+
                 if chapter_content:  # 只有有内容的章节才处理
                     # 提取章节编号和名称
-                    chapter_id, chapter_name = extract_chapter_id_and_name(chapter_title)
-                    
+                    chapter_id, chapter_name = extract_chapter_id_and_name(
+                        chapter_title
+                    )
+
                     # 保存章节内容到文件
                     chapter_file = f"{book_dir}/list/{chapter_index}.txt"
-                    with open(chapter_file, 'w', encoding='utf-8') as f:
+                    with open(chapter_file, "w", encoding="utf-8") as f:
                         # 按段落分割并保存
-                        paragraphs = chapter_content.split('\n')
+                        paragraphs = chapter_content.split("\n")
                         for paragraph in paragraphs:
                             paragraph = paragraph.strip()
                             if paragraph:
-                                f.write(paragraph + '\n')
-                    
+                                f.write(paragraph + "\n")
+
                     # 添加到章节列表
-                    chapter_list.append({
-                        "id": chapter_id if chapter_id else f"第{chapter_index + 1}章",
-                        "name": chapter_name if chapter_name else chapter_title,
-                        "url": ""  # 本地文件没有URL
-                    })
-                    
+                    chapter_list.append(
+                        {
+                            "id": chapter_id
+                            if chapter_id
+                            else f"第{chapter_index + 1}章",
+                            "name": chapter_name if chapter_name else chapter_title,
+                            "url": "",  # 本地文件没有URL
+                        }
+                    )
+
                     chapter_index += 1
-        
+
         # 如果没有找到章节分割，将整个文件作为一章
         if not chapter_list:
-            with open(f"{book_dir}/list/0.txt", 'w', encoding='utf-8') as f:
-                paragraphs = content.split('\n')
+            with open(f"{book_dir}/list/0.txt", "w", encoding="utf-8") as f:
+                paragraphs = content.split("\n")
                 for paragraph in paragraphs:
                     paragraph = paragraph.strip()
                     if paragraph:
-                        f.write(paragraph + '\n')
-            
-            chapter_list.append({
-                "id": "第1章",
-                "name": file_path.stem,  # 使用文件名作为章节名
-                "url": ""
-            })
-        
+                        f.write(paragraph + "\n")
+
+            chapter_list.append(
+                {
+                    "id": "第1章",
+                    "name": file_path.stem,  # 使用文件名作为章节名
+                    "url": "",
+                }
+            )
+
         # 保存章节信息到JSON
-        with open(f"{book_dir}/{book_id}.json", 'w', encoding='utf-8') as f:
+        with open(f"{book_dir}/{book_id}.json", "w", encoding="utf-8") as f:
             json.dump(chapter_list, f, ensure_ascii=False, indent=4)
-        
+
         print(f"成功加载本地文件，共 {len(chapter_list)} 章")
         return True
-        
+
     except Exception as e:
         print(f"加载本地文件失败: {e}")
         return False
@@ -119,11 +127,11 @@ def load_local_txt_file(file_path: str, book_id: str) -> bool:
 def get_book_content(book_id: str, local_file: str = None) -> str:
     """
     获取书籍内容
-    
+
     Args:
         book_id: 书籍ID
         local_file: 本地文件路径（可选）
-        
+
     Returns:
         str: 书籍文件路径或False
     """
@@ -133,7 +141,7 @@ def get_book_content(book_id: str, local_file: str = None) -> str:
             return f"data/book/{book_id}/{book_id}.json"  # 返回JSON文件路径
         else:
             return False
-    
+
     # 否则从网络获取
     try:
         url = f"https://www.qidian.com/book/{book_id}/"
@@ -224,7 +232,7 @@ def extract_free_chapters(html_file: str, book_id: str) -> list:
 def get_chapter_content(book_id: str, from_local: bool = False) -> str:
     """
     从HTML文本中提取小说内容并保存到文件
-    
+
     Args:
         book_id: 书籍ID
         from_local: 是否来自本地文件（如果是，跳过网络获取）
@@ -233,12 +241,12 @@ def get_chapter_content(book_id: str, from_local: bool = False) -> str:
         # 如果是本地文件，内容已经在load_local_txt_file中处理了
         if from_local:
             return True
-            
+
         # 读取章节信息List
         with open(f"data/book/{book_id}/{book_id}.json", "r", encoding="utf-8") as file:
             chapters = json.load(file)
         # 使用进度条
-        for (index, chapter) in tqdm(enumerate(chapters), desc="获取章节内容"):
+        for index, chapter in tqdm(enumerate(chapters), desc="获取章节内容"):
             if chapter["url"]:
                 payload = {}
                 headers = {
@@ -278,13 +286,13 @@ def get_chapter_content(book_id: str, from_local: bool = False) -> str:
 
 if __name__ == "__main__":
     import sys
-    
+
     # 支持命令行参数指定本地文件
     local_file = None
     book_id = "1043294775"  # 默认书籍ID
-    
+
     if len(sys.argv) >= 2:
-        if sys.argv[1].endswith('.txt'):
+        if sys.argv[1].endswith(".txt"):
             local_file = sys.argv[1]
             if len(sys.argv) >= 3:
                 book_id = sys.argv[2]
@@ -293,11 +301,11 @@ if __name__ == "__main__":
                 book_id = Path(local_file).stem
         else:
             book_id = sys.argv[1]
-    
+
     print(f"处理书籍ID: {book_id}")
     if local_file:
         print(f"使用本地文件: {local_file}")
-    
+
     book = get_book_content(book_id, local_file)
     if book:
         if not local_file:  # 只有网络获取的才需要解析HTML

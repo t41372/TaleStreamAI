@@ -1,6 +1,6 @@
 import PIL.Image
 import numpy as np
-from moviepy import ImageClip, AudioFileClip, CompositeVideoClip
+from moviepy.editor import ImageClip, AudioFileClip, CompositeVideoClip
 import os
 import tempfile
 import time
@@ -13,6 +13,7 @@ import json
 import concurrent.futures
 import random
 from PIL import Image
+from .ffmpeg_utils import get_ffmpeg_gpu_params
 
 # 设置日志 - 仅记录错误
 logging.basicConfig(
@@ -31,6 +32,93 @@ json_locks = {}
 # Add compatibility patch for ANTIALIAS
 if not hasattr(PIL.Image, "ANTIALIAS"):
     PIL.Image.ANTIALIAS = PIL.Image.LANCZOS
+
+
+def create_fallback_image(width, height):
+    """
+    创建一个黑色背景的备用图片
+    
+    参数:
+        width (int): 图片宽度
+        height (int): 图片高度
+    
+    返回:
+        ImageClip: 黑色背景的图片clip
+    """
+    try:
+        from PIL import Image
+        from moviepy.editor import ImageClip
+        import numpy as np
+        
+        # 创建黑色图片
+        black_image = np.zeros((height, width, 3), dtype=np.uint8)
+        
+        # 转换为PIL图片
+        pil_image = Image.fromarray(black_image)
+        
+        # 转换为ImageClip
+        return ImageClip(np.array(pil_image))
+        
+    except Exception as e:
+        print(f"创建备用图片失败: {e}")
+        # 如果连创建黑色图片都失败，返回一个最小的图片
+        try:
+            import numpy as np
+            from moviepy.editor import ImageClip
+            minimal_image = np.zeros((100, 100, 3), dtype=np.uint8)
+            return ImageClip(minimal_image)
+        except:
+            raise Exception("无法创建备用图片")
+
+
+def find_fallback_image(missing_image_path):
+    """
+    寻找备用图片（之前成功生成的图片）
+    
+    参数:
+        missing_image_path (str): 缺失的图片路径
+    
+    返回:
+        str: 备用图片路径，如果没有找到返回None
+    """
+    try:
+        # 从路径中提取信息
+        dir_path = os.path.dirname(missing_image_path)
+        filename = os.path.basename(missing_image_path)
+        
+        # 提取当前图片的编号
+        name_without_ext = os.path.splitext(filename)[0]
+        try:
+            current_num = int(name_without_ext)
+        except ValueError:
+            return None
+        
+        # 向前寻找存在的图片（最多向前找10张）
+        for i in range(1, min(current_num, 11)):
+            prev_num = current_num - i
+            if prev_num <= 0:
+                break
+                
+            prev_filename = f"{prev_num}.jpg"
+            prev_path = os.path.join(dir_path, prev_filename)
+            
+            if os.path.exists(prev_path):
+                return prev_path
+        
+        # 如果向前找不到，向后寻找（最多向后找5张）
+        for i in range(1, 6):
+            next_num = current_num + i
+            next_filename = f"{next_num}.jpg"
+            next_path = os.path.join(dir_path, next_filename)
+            
+            if os.path.exists(next_path):
+                return next_path
+        
+        return None
+        
+    except Exception as e:
+        print(f"寻找备用图片时出错: {e}")
+        return None
 
 
 def create_video_with_moving_image(
@@ -141,8 +229,27 @@ def create_video_with_moving_image(
         # 获取调整后的音频时长
         audio_duration = audio.duration
 
-        # 加载图片
-        image_clip = ImageClip(image_path)
+        # 加载图片 - 增加容错处理
+        if os.path.exists(image_path):
+            try:
+                image_clip = ImageClip(image_path)
+            except Exception as e:
+                print(f"警告：加载图片失败: {image_path}, 错误: {e}")
+                image_clip = create_fallback_image(final_width, final_height)
+        else:
+            print(f"警告：图片文件不存在: {image_path}")
+            # 尝试找到备用图片
+            fallback_image_path = find_fallback_image(image_path)
+            if fallback_image_path and os.path.exists(fallback_image_path):
+                print(f"使用备用图片: {fallback_image_path}")
+                try:
+                    image_clip = ImageClip(fallback_image_path)
+                except Exception as e:
+                    print(f"警告：加载备用图片失败: {fallback_image_path}, 错误: {e}")
+                    image_clip = create_fallback_image(final_width, final_height)
+            else:
+                print("使用黑色背景")
+                image_clip = create_fallback_image(final_width, final_height)
 
         # 计算基础缩放因子以保持图片比例适配视频尺寸
         width_ratio = final_width / image_clip.size[0]
@@ -167,12 +274,8 @@ def create_video_with_moving_image(
         extra_height = max(0, extra_height)
 
         # 计算安全移动距离（不会导致黑边）
-        safe_x_distance = min(
-            resized_image.size[0] * move_distance * move_speed, extra_width
-        )
-        safe_y_distance = min(
-            resized_image.size[1] * move_distance * move_speed, extra_height
-        )
+        safe_x_distance = min(resized_image.size[0] * move_distance * move_speed, extra_width)
+        safe_y_distance = min(resized_image.size[1] * move_distance * move_speed, extra_height)
 
         # 计算入场效果的偏移量（用于初始位置计算）
         entrance_x_offset = 0
@@ -249,9 +352,7 @@ def create_video_with_moving_image(
                 else:
                     # 计算入场后的移动进度
                     t_after_entrance = max(0, t - entrance_duration)
-                    adjusted_progress = min(
-                        1.0, (t_after_entrance / remaining_time) * move_speed
-                    )
+                    adjusted_progress = min(1.0, (t_after_entrance / remaining_time) * move_speed)
             else:
                 # 没有入场效果时的原始计算
                 adjusted_progress = min(1.0, (t / audio_duration) * move_speed)
@@ -270,14 +371,10 @@ def create_video_with_moving_image(
                 return (-safe_x_distance * adjusted_progress, 0)
 
         # 应用移动效果到图片
-        moving_image = resized_image.set_position(move_position).set_duration(
-            audio_duration
-        )
+        moving_image = resized_image.set_position(move_position).set_duration(audio_duration)
 
         # 合成视频和音频
-        final_clip = CompositeVideoClip(
-            [moving_image], size=(final_width, final_height)
-        )
+        final_clip = CompositeVideoClip([moving_image], size=(final_width, final_height))
         final_clip = final_clip.set_audio(audio)
 
         # 检查同名SRT字幕文件是否存在 - 使用audio_path而不是output_path
@@ -310,15 +407,11 @@ def create_video_with_moving_image(
                             duration = end_time - start_time
 
                             # 创建一个空白图像作为字幕背景
-                            img = Image.new(
-                                "RGBA", (final_width, final_height), (0, 0, 0, 0)
-                            )
+                            img = Image.new("RGBA", (final_width, final_height), (0, 0, 0, 0))
                             draw = ImageDraw.Draw(img)
 
                             # 计算自适应字体大小
-                            font_size = calculate_adaptive_font_size(
-                                text, max_subtitle_width, font
-                            )
+                            font_size = calculate_adaptive_font_size(text, max_subtitle_width, font)
 
                             # 处理文本换行
                             lines = wrap_text(text, max_subtitle_width, font, font_size)
@@ -328,9 +421,7 @@ def create_video_with_moving_image(
                             text_height = len(lines) * line_height
 
                             # 计算起始y坐标（底部上方10%位置）
-                            y_position = (
-                                final_height - text_height - int(final_height * 0.1)
-                            )
+                            y_position = final_height - text_height - int(final_height * 0.1)
 
                             # 绘制字幕
                             for line_idx, line in enumerate(lines):
@@ -391,9 +482,21 @@ def create_video_with_moving_image(
 
                 traceback.print_exc()
 
+        # 获取GPU加速参数
+        gpu_params = get_ffmpeg_gpu_params()
+        
+        # 合并所有的ffmpeg参数
+        all_ffmpeg_params = gpu_params["pre_input"] + gpu_params["extra_params"]
+        
         # 写入输出文件
         final_clip.write_videofile(
-            output_path, fps=24, codec="libx264", verbose=False, logger=None
+            output_path,
+            fps=24,
+            threads=os.cpu_count(), # 为CPU编码设置多线程
+            verbose=False,
+            logger=None,
+            ffmpeg_params=all_ffmpeg_params,
+            **gpu_params["output_params"]
         )
 
         # 关闭所有剪辑释放资源
@@ -701,9 +804,7 @@ def parse_srt_file(srt_path):
                         text = "\n".join(text_lines)
 
                         # 添加到字幕列表
-                        subtitles.append(
-                            {"start": start_seconds, "end": end_seconds, "text": text}
-                        )
+                        subtitles.append({"start": start_seconds, "end": end_seconds, "text": text})
                     else:
                         i += 1
                 else:
@@ -770,20 +871,24 @@ def process_item(item, book_id, chapter_file_path, pbar):
         pbar.update(1)  # 更新进度条
         return True
 
+    # 从环境变量安全地读取布尔值
+    portrait_mode = os.getenv("PORTRAIT_MODE", "false").lower() in ("true", "1", "t")
+    entrance_effect = os.getenv("ENTRANCE_EFFECT", "false").lower() in ("true", "1", "t")
+
     # 生成视频
     video_data = create_video_with_moving_image(
         image_path,
         audio_path,
         video_path,
         move_direction=random.choice(["left", "up", "down", "right"]),
-        portrait_mode=os.getenv("PORTRAIT_MODE"),
-        video_width=int(os.getenv("VIDEO_WIDTH")) or 750,
-        video_height=int(os.getenv("VIDEO_HEIGHT")) or 1280,
-        move_distance=float(os.getenv("MOVE_DISTANCE")) or 0.1,
-        move_speed=float(os.getenv("MOVE_SPEED")) or 1.0,
-        entrance_effect=os.getenv("ENTRANCE_EFFECT"),
-        entrance_duration=float(os.getenv("ENTRANCE_DURATION")),
-        audio_speed=float(os.getenv("AUDIO_SPEED")) or 1.0,
+        portrait_mode=portrait_mode, # 使用正确的布尔值
+        video_width=int(os.getenv("VIDEO_WIDTH", "750")),
+        video_height=int(os.getenv("VIDEO_HEIGHT", "1280")),
+        move_distance=float(os.getenv("MOVE_DISTANCE", "0.1")),
+        move_speed=float(os.getenv("MOVE_SPEED", "1.0")),
+        entrance_effect=entrance_effect, # 使用正确的布尔值
+        entrance_duration=float(os.getenv("ENTRANCE_DURATION", "0.2")),
+        audio_speed=float(os.getenv("AUDIO_SPEED", "1.0")),
     )
 
     # 检查是否生成成功

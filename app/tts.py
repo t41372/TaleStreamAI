@@ -11,29 +11,31 @@ def generate_subtitle_from_audio(audio_path: str, original_text: str = None) -> 
     """
     Generate subtitle from existing audio file using Edge TTS metadata.
     This is used when we already have audio but need to regenerate subtitles.
-    
+
     Args:
         audio_path: Path to audio file
         original_text: Original text with punctuation for restoration
-        
+
     Returns:
         Path to generated subtitle file
     """
     try:
         # Check if subtitle already exists
         subtitle_path = os.path.splitext(audio_path)[0] + ".srt"
-        
+
         if os.path.exists(subtitle_path):
             return subtitle_path
-            
+
         # If we have original text, try to read it and regenerate subtitles
         if original_text:
             # Note: Edge TTS subtitles are generated during audio creation
             # For existing audio files, we'd need to re-process them
-            logger.warning(f"Subtitle not found for {audio_path}, would need to regenerate audio for subtitles")
-            
+            logger.warning(
+                f"Subtitle not found for {audio_path}, would need to regenerate audio for subtitles"
+            )
+
         return subtitle_path
-        
+
     except Exception as e:
         logger.error(f"Failed to generate subtitle for {audio_path}: {e}")
         return ""
@@ -50,7 +52,7 @@ def create_tts(book_id: str, base_path: str):
     if not os.path.exists(storyboard_dir):
         logger.error(f"小说信息不存在{storyboard_dir}")
         return
-        
+
     try:
         chapter_files = os.listdir(storyboard_dir)
         chapter_files.sort(key=lambda x: int(x.split(".")[0]))
@@ -58,7 +60,7 @@ def create_tts(book_id: str, base_path: str):
     except Exception as e:
         logger.error(f"读取章节文件失败：{str(e)}")
         return
-        
+
     # 计算总进度
     total_items = 0
     try:
@@ -69,7 +71,7 @@ def create_tts(book_id: str, base_path: str):
     except Exception as e:
         logger.error(f"计算总进度失败：{str(e)}")
         return
-        
+
     # 创建总进度条
     with tqdm(total=total_items, desc="字幕检查进度", unit="项") as pbar:
         for chapter_file_path in chapter_file_paths:
@@ -77,13 +79,17 @@ def create_tts(book_id: str, base_path: str):
                 chapter_data = json.load(f)
                 for item in chapter_data:
                     audio_path = item.get("audio_path", "")
-                    
+
                     # 处理路径
                     if "data/" in audio_path:
-                        full_audio_path = os.path.join(base_path, audio_path.lstrip("/"))
+                        full_audio_path = os.path.join(
+                            base_path, audio_path.lstrip("/")
+                        )
                     else:
-                        full_audio_path = os.path.join(base_path, f"data/book/{book_id}/{audio_path}")
-                    
+                        full_audio_path = os.path.join(
+                            base_path, f"data/book/{book_id}/{audio_path}"
+                        )
+
                     # 检查音频文件是否存在
                     if os.path.exists(full_audio_path):
                         # 检查对应的字幕文件
@@ -92,7 +98,7 @@ def create_tts(book_id: str, base_path: str):
                             # 尝试生成字幕
                             original_text = item.get("text", "")
                             generate_subtitle_from_audio(full_audio_path, original_text)
-                    
+
                     pbar.update(1)
 
 
