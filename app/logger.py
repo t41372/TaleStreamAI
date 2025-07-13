@@ -174,7 +174,7 @@ def log_progress(step: str, current: int, total: int, description: str = ""):
     """記錄進度"""
     logger.progress(step, current, total, description)
 
-def log_api_start(api_name: str, endpoint: str = "", model: str = ""):
+def log_api_start(api_name: str, endpoint: str = "", model: str = "", details: str = ""):
     """記錄API調用開始"""
     logger.api_call_start(api_name, endpoint, model)
 
@@ -182,7 +182,7 @@ def log_api_success(api_name: str, duration: float = 0, details: str = ""):
     """記錄API調用成功"""
     logger.api_call_success(api_name, duration, details)
 
-def log_api_error(api_name: str, error: str, retry_count: int = 0):
+def log_api_error(api_name: str, error: str, retry_count: int = 0, details: str = ""):
     """記錄API調用失敗"""
     logger.api_call_error(api_name, error, retry_count)
 

@@ -2,6 +2,7 @@ import os
 import json
 import time
 import asyncio
+from pathlib import Path
 from openai import OpenAI
 import re
 from tqdm import tqdm
@@ -248,21 +249,21 @@ def generate_board(book_id: str):
         log_error("API連接失敗，請檢查環境變量設置")
         return False
     
-    # 確保目標目錄存在
-    storyboard_dir = f"data/book/{book_id}/storyboard"
-    if not os.path.exists(storyboard_dir):
-        os.makedirs(storyboard_dir)
-        log_info(f"創建分鏡目錄: {storyboard_dir}")
+    # 確保目標目錄存在 - 使用pathlib
+    base_path = Path("data") / "book" / book_id
+    storyboard_dir = base_path / "storyboard"
+    storyboard_dir.mkdir(parents=True, exist_ok=True)
+    log_info(f"確保分鏡目錄存在: {storyboard_dir}")
 
-    # 獲取所有章節文件
-    chapter_dir = f"data/book/{book_id}/list"
-    if not os.path.exists(chapter_dir):
+    # 獲取所有章節文件 - 使用pathlib
+    chapter_dir = base_path / "list"
+    if not chapter_dir.exists():
         log_error(f"章節目錄不存在: {chapter_dir}")
         return False
         
-    chapter_files = os.listdir(chapter_dir)
+    chapter_files = list(chapter_dir.glob("*.txt"))
     # 按文件名排序
-    chapter_files.sort(key=lambda x: int(x.split(".")[0]))
+    chapter_files.sort(key=lambda x: int(x.stem))
     
     log_info(f"發現 {len(chapter_files)} 個章節文件")
 
@@ -273,14 +274,14 @@ def generate_board(book_id: str):
 
     for i, chapter_file in enumerate(chapter_files):
         # 獲取章節索引
-        index = chapter_file.split(".")[0]
-        # 檢查目標文件是否已存在且有內容
-        target_file = f"{storyboard_dir}/{index}.json"
+        index = chapter_file.stem
+        # 檢查目標文件是否已存在且有內容 - 使用pathlib
+        target_file = storyboard_dir / f"{index}.json"
         
         log_progress("章節分鏡處理", i + 1, len(chapter_files), f"處理章節 {index}")
 
         # 文件存在性檢查
-        if os.path.exists(target_file):
+        if target_file.exists():
             try:
                 with open(target_file, "r", encoding="utf-8") as f:
                     existing_content = json.load(f)
@@ -288,17 +289,15 @@ def generate_board(book_id: str):
                 if existing_content and (
                     isinstance(existing_content, list) and len(existing_content) > 0
                 ):
-                    log_info(f"跳過章節 {chapter_file} - 文件已存在且內容有效")
-                    skipped_chapters.append(chapter_file)
+                    log_info(f"跳過章節 {chapter_file.name} - 文件已存在且內容有效")
+                    skipped_chapters.append(chapter_file.name)
                     continue  # 跳過處理
             except (json.JSONDecodeError, IOError):
                 # 如果文件存在但內容無效或不可讀，則重新處理
                 log_warning(f"文件 {target_file} 存在但包含無效數據 - 重新處理")
 
         # 讀取章節內容
-        with open(
-            f"data/book/{book_id}/list/{chapter_file}", "r", encoding="utf-8"
-        ) as file:
+        with open(chapter_file, "r", encoding="utf-8") as file:
             chapter_content = file.read()
 
         # 檢查內容長度，如果太長則自動分塊處理
@@ -306,60 +305,64 @@ def generate_board(book_id: str):
         line_count = len(lines)
         content_size = len(chapter_content)
         
-        print(f"章節 {chapter_file}: {line_count} 行, {content_size} 字符")
+        log_debug(f"章節 {chapter_file.name}: {line_count} 行, {content_size} 字符")
 
         # 如果內容超過20行或5KB，進行分塊處理
         if line_count > 20 or content_size > 5000:
-            print(f"章節 {chapter_file} 內容較長，進行分塊處理")
+            log_info(f"章節 {chapter_file.name} 內容較長，進行分塊處理")
             chunks = split_content_into_chunks(chapter_content, 20)  # 每塊20行
             chunk_results = []
 
-            print(f"將章節分為 {len(chunks)} 個塊進行處理")
+            log_info(f"將章節分為 {len(chunks)} 個塊進行處理")
             for i, chunk in enumerate(chunks):
-                print(f"\n🔄 處理塊 {i+1}/{len(chunks)}")
-                print(f"塊內容長度: {len(chunk)} 字符")
+                log_debug(f"處理塊 {i+1}/{len(chunks)}, 內容長度: {len(chunk)} 字符")
                 chunk_json = generate_board_json(chunk, use_stream=True)
 
                 if chunk_json:
                     chunk_results.append(chunk_json)
-                    print(f"✅ 塊 {i+1} 處理成功，生成 {len(chunk_json)} 個分鏡")
+                    log_debug(f"塊 {i+1} 處理成功，生成 {len(chunk_json)} 個分鏡")
                 else:
-                    print(f"❌ 警告：無法為章節 {chapter_file} 的塊 {i+1} 生成分鏡")
+                    log_error(f"無法為章節 {chapter_file.name} 的塊 {i+1} 生成分鏡")
 
             if chunk_results:
                 # 合并所有成功的块结果
                 board_json = merge_json_results(chunk_results)
-                print(f"成功合併 {len(chunk_results)} 個塊的結果，共 {len(board_json)} 個分鏡項")
+                log_info(f"成功合併 {len(chunk_results)} 個塊的結果，共 {len(board_json)} 個分鏡項")
             else:
-                print(f"警告：章節 {chapter_file} 的所有塊處理都失败了")
+                log_error(f"章節 {chapter_file.name} 的所有塊處理都失敗了")
                 board_json = []
         else:
             # 直接處理完整章節
-            print(f"📖 直接處理完整章節")
+            log_debug(f"直接處理完整章節 {chapter_file.name}")
             board_json = generate_board_json(chapter_content, use_stream=True)
 
         # 处理空结果
         if not board_json:
-            failed_chapters.append(chapter_file)
-            print(f"警告：无法为章节 {chapter_file} 生成分镜")
+            failed_chapters.append(chapter_file.name)
+            log_error(f"無法為章節 {chapter_file.name} 生成分鏡")
             continue
 
-        # 将JSON写入文件
+        # 将JSON写入文件 - 使用pathlib
         with open(target_file, "w", encoding="utf-8") as f:
             json.dump(board_json, f, ensure_ascii=False, indent=2)
+        
+        processed_chapters.append(chapter_file.name)
+        log_info(f"章節 {chapter_file.name} 分鏡生成完成，共 {len(board_json)} 個分鏡項")
 
     # 报告处理结果
     if skipped_chapters:
-        print(f"跳过了 {len(skipped_chapters)} 个章节（文件已存在且内容有效）")
+        log_info(f"跳過了 {len(skipped_chapters)} 個章節（文件已存在且內容有效）")
 
     if failed_chapters:
-        print(f"处理完成，但以下章节失败: {', '.join(failed_chapters)}")
+        log_error(f"處理完成，但以下章節失敗: {', '.join(failed_chapters)}")
+        duration = time.time() - start_time
+        log_step_complete(step_name, duration, "部分失敗")
         return False
     else:
         processed_count = len(chapter_files) - len(skipped_chapters)
-        print(
-            f"所有章节处理成功。处理了 {processed_count} 个章节，跳过了 {len(skipped_chapters)} 个章节"
-        )
+        log_info(f"所有章節處理成功。處理了 {processed_count} 個章節，跳過了 {len(skipped_chapters)} 個章節")
+        duration = time.time() - start_time
+        log_step_complete(step_name, duration, f"成功處理 {processed_count} 個章節")
         return True
 
 

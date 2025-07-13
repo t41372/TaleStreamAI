@@ -1,8 +1,6 @@
 import PIL.Image
 import numpy as np
-from moviepy.editor import ImageClip, AudioFileClip, CompositeVideoClip
-import librosa
-import soundfile as sf
+from moviepy import ImageClip, AudioFileClip, CompositeVideoClip
 import os
 import tempfile
 import time

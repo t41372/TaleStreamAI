@@ -140,7 +140,7 @@ class TestImageModule:
         import app.image
         assert hasattr(app.image, 'create_Image')
         assert hasattr(app.image, 'save_image_data')
-        assert hasattr(app.image, 'get_book_content')
+        assert hasattr(app.image, 'generate_book_images')
     
     def test_flux_url_generation(self):
         """Test Flux API URL generation."""

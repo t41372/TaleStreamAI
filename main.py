@@ -3,7 +3,8 @@ import sys
 from pathlib import Path
 from app.main import get_book_content, extract_free_chapters, get_chapter_content
 from app.board import generate_board, test_api_connection
-from app.image import get_book_images, get_book_content as create_book_image
+from app.prompt import process_board_files
+from app.image import get_book_images, generate_book_images
 from app.audio import create_book_audio
 from app.tts import create_tts
 from app.video import create_book_video
@@ -65,8 +66,13 @@ def main():
     # 生成分镜
     success = generate_board(book_id)
     if success:
+        # 处理分镜提示词（关键步骤：将 lensLanguage_en 优化为 lensLanguage_end）
+        log_step_start("提示词优化", f"处理分镜提示词用于图片生成")
+        process_board_files(book_id)
+        log_step_complete("提示词优化", 0, "分镜提示词优化完成")
+        
         # 生成图片
-        create_book_image(book_id)
+        generate_book_images(book_id)
         # 高清修复
         get_book_images(book_id)
         # 生成音频和字幕 (使用Edge TTS)

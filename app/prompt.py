@@ -2,11 +2,15 @@ from openai import OpenAI
 import json
 import os
 import re
+import time
 import concurrent.futures
 import threading
+from pathlib import Path
 from tqdm import tqdm
 from dotenv import load_dotenv
 from .llm_client import get_prompt_client
+from .logger import (log_step_start, log_step_complete, log_progress, log_info, 
+                    log_error, log_debug, log_api_start, log_api_success, log_api_error)
 
 load_dotenv()
 
@@ -42,6 +46,18 @@ def create_client():
 
 # 润色提示词
 def refine_prompt(text: str, board_info: str, client=None, use_stream=True) -> str:
+    """
+    使用LLM優化圖片生成提示詞
+    
+    Args:
+        text: 分鏡文字內容
+        board_info: 分鏡關鍵字
+        client: LLM客戶端
+        use_stream: 是否使用流式響應
+        
+    Returns:
+        優化後的提示詞
+    """
     global prompt
     if client is None:
         client = create_client()
@@ -54,8 +70,7 @@ def refine_prompt(text: str, board_info: str, client=None, use_stream=True) -> s
 
     try:
         if use_stream:
-            print(f"\n🎨 開始流式生成圖片提示詞...")
-            print("-" * 40)
+            log_api_start("PROMPT_REFINE_STREAM", details="流式生成圖片提示詞")
             
             # 使用流式請求
             response_stream = client.chat_completion_stream(
@@ -70,22 +85,23 @@ def refine_prompt(text: str, board_info: str, client=None, use_stream=True) -> s
             for chunk in response_stream:
                 if chunk.choices[0].delta.content is not None:
                     chunk_content = chunk.choices[0].delta.content
-                    print(chunk_content, end='', flush=True)
                     full_content += chunk_content
             
-            print("\n" + "-" * 40)
-            print("✅ 提示詞生成完成\n")
+            log_api_success("PROMPT_REFINE_STREAM", details=f"生成提示詞長度: {len(full_content)} 字符")
             return full_content
         else:
+            log_api_start("PROMPT_REFINE", details="生成圖片提示詞")
             response = client.chat_completion(
                 messages=[
                     {"role": "system", "content": prompt},
                     {"role": "user", "content": _text},
                 ],
             )
-            return response.choices[0].message.content
+            content = response.choices[0].message.content
+            log_api_success("PROMPT_REFINE", details=f"生成提示詞長度: {len(content)} 字符")
+            return content
     except Exception as e:
-        safe_print(f"API调用失败: {e}")
+        log_api_error("PROMPT_REFINE", str(e))
         raise
 
 
@@ -104,11 +120,21 @@ def handle_board_text_exception(text: str) -> str:
 
 # 处理单个分镜对象
 def process_single_item(item, client):
+    """
+    處理單個分鏡對象，將 lensLanguage_en 優化為 lensLanguage_end
+    
+    Args:
+        item: 分鏡對象
+        client: LLM客戶端
+        
+    Returns:
+        tuple: (處理後的對象, 狀態)
+    """
     item_id = item.get("id", "未知")
 
     # 检查是否已处理过（已有lensLanguage_end字段）
     if "lensLanguage_end" in item and item["lensLanguage_end"]:
-        safe_print(f"跳过已处理的ID: {item_id}")
+        log_debug(f"跳過已處理的分鏡ID: {item_id}")
         return item, "skipped"
 
     # 预处理文本
@@ -118,22 +144,37 @@ def process_single_item(item, client):
 
     # 生成优化的提示词
     try:
-        lens_language = refine_prompt(processed_text, processed_text, client, use_stream=True)
+        log_debug(f"開始處理分鏡ID: {item_id}")
+        lens_language = refine_prompt(processed_text, processed_text, client, use_stream=False)
         item["lensLanguage_end"] = lens_language
+        log_debug(f"分鏡ID: {item_id} 處理成功，生成提示詞長度: {len(lens_language)} 字符")
         return item, "success"
     except Exception as e:
         # 处理失败时，使用lensLanguage_en的值作为备选
         if "lensLanguage_en" in item and item["lensLanguage_en"]:
             item["lensLanguage_end"] = item["lensLanguage_en"]
-            safe_print(f"处理ID: {item_id} 时出错，使用lensLanguage_en作为备选")
+            log_error(f"分鏡ID: {item_id} 處理失敗，使用lensLanguage_en作為備選: {str(e)}")
             return item, "fallback"
         else:
-            safe_print(f"处理ID: {item_id} 时出错，且无可用的lensLanguage_en: {e}")
+            log_error(f"分鏡ID: {item_id} 處理失敗，且無可用的lensLanguage_en: {str(e)}")
             return item, "error"
 
 
 # 处理单个章节文件
 def process_chapter_file(chapter_file_path, max_workers=10):
+    """
+    處理單個章節分鏡文件
+    
+    Args:
+        chapter_file_path: 章節文件路徑
+        max_workers: 最大並發數
+        
+    Returns:
+        bool: 處理是否成功
+    """
+    chapter_name = Path(chapter_file_path).stem
+    log_info(f"開始處理章節: {chapter_name}")
+    
     try:
         # 读取文件内容
         with open(chapter_file_path, "r", encoding="utf-8") as f:
@@ -141,11 +182,14 @@ def process_chapter_file(chapter_file_path, max_workers=10):
 
         # 创建客户端
         client = create_client()
+        log_debug(f"章節 {chapter_name} 提示詞模型客戶端初始化成功")
 
         # 使用线程池处理每个对象
         processed_items = []
         result_stats = {"success": 0, "fallback": 0, "error": 0, "skipped": 0}
         total_items = len(board_info)
+        
+        log_info(f"章節 {chapter_name} 需要處理 {total_items} 個分鏡項目")
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
             # 提交所有任务
@@ -158,7 +202,8 @@ def process_chapter_file(chapter_file_path, max_workers=10):
             for future in tqdm(
                 concurrent.futures.as_completed(future_to_item),
                 total=total_items,
-                desc=f"处理 {os.path.basename(chapter_file_path)}",
+                desc=f"處理 {chapter_name}",
+                unit="項目",
             ):
                 item_result, status = future.result()
                 processed_items.append(item_result)
@@ -168,47 +213,69 @@ def process_chapter_file(chapter_file_path, max_workers=10):
         with open(chapter_file_path, "w", encoding="utf-8") as f:
             json.dump(processed_items, f, ensure_ascii=False, indent=2)
 
-        safe_print(f"已完成文件 {os.path.basename(chapter_file_path)} 的处理")
-        safe_print(
-            f"统计: 成功={result_stats['success']}, 使用备选={result_stats['fallback']}, 错误={result_stats['error']}, 跳过={result_stats['skipped']}"
+        log_info(f"章節 {chapter_name} 處理完成")
+        log_info(
+            f"統計: 成功={result_stats['success']}, 使用備選={result_stats['fallback']}, "
+            f"錯誤={result_stats['error']}, 跳過={result_stats['skipped']}"
         )
         return True
     except Exception as e:
-        safe_print(f"处理文件 {os.path.basename(chapter_file_path)} 时出错: {e}")
+        log_error(f"處理章節文件 {chapter_name} 時出錯: {e}")
         return False
 
 
 # 多线程处理所有分镜文件
 def process_board_files(book_id: str, file_threads=5, item_threads=10) -> None:
-    # 读取 data/book/{book_id}/storyboard/*.json
-    storyboard_dir = f"data/book/{book_id}/storyboard"
-    if not os.path.exists(storyboard_dir):
-        print(f"目录不存在: {storyboard_dir}")
+    """
+    處理書籍的所有分鏡文件，將 lensLanguage_en 優化為 lensLanguage_end
+    
+    Args:
+        book_id: 書籍ID
+        file_threads: 文件級別線程數
+        item_threads: 分鏡項目級別線程數
+    """
+    step_name = "分鏡提示詞處理"
+    log_step_start(step_name, f"書籍ID: {book_id}")
+    start_time = time.time()
+    
+    # 使用pathlib处理路径
+    base_path = Path("data") / "book" / book_id
+    storyboard_dir = base_path / "storyboard"
+    
+    if not storyboard_dir.exists():
+        log_error(f"分鏡目錄不存在: {storyboard_dir}")
         return
 
     # 按文件名排序
-    chapter_files = os.listdir(storyboard_dir)
-    chapter_files.sort(key=lambda x: int(x.split(".")[0]))
-    chapter_file_paths = [os.path.join(storyboard_dir, f) for f in chapter_files]
+    chapter_files = list(storyboard_dir.glob("*.json"))
+    chapter_files.sort(key=lambda x: int(x.stem))
+    
+    log_info(f"發現 {len(chapter_files)} 個分鏡文件")
 
     # 使用线程池处理文件
     with concurrent.futures.ThreadPoolExecutor(max_workers=file_threads) as executor:
         # 提交所有任务
         futures = [
-            executor.submit(process_chapter_file, path, item_threads)
-            for path in chapter_file_paths
+            executor.submit(process_chapter_file, str(chapter_file), item_threads)
+            for chapter_file in chapter_files
         ]
 
         # 处理结果
+        successful_files = 0
         for i, future in enumerate(concurrent.futures.as_completed(futures)):
             try:
                 result = future.result()
                 if result:
-                    safe_print(f"成功处理文件 {i+1}/{len(chapter_files)}")
+                    successful_files += 1
+                    log_debug(f"成功處理文件 {i+1}/{len(chapter_files)}")
                 else:
-                    safe_print(f"处理文件失败 {i+1}/{len(chapter_files)}")
+                    log_error(f"處理文件失敗 {i+1}/{len(chapter_files)}")
             except Exception as e:
-                safe_print(f"处理文件时发生异常: {e}")
+                log_error(f"處理文件時發生異常: {e}")
+    
+    duration = time.time() - start_time
+    log_step_complete(step_name, duration, f"成功處理 {successful_files}/{len(chapter_files)} 個文件")
+    log_info(f"分鏡提示詞處理完成，成功 {successful_files}/{len(chapter_files)} 個文件")
 
 
 if __name__ == "__main__":

@@ -3,31 +3,17 @@ import json
 import os
 import base64
 import time
-from io import BytesIO
-from PIL import Image  # 需要安装 Pillow 库: pip install Pillow
-from dotenv import load_dotenv
-from tqdm import tqdm  # 用于显示进度条
-import gc
-import subprocess
-import glob
-
-
-# 加载环境变量
-load_dotenv(override=True)
-
-import requests
-import json
-import os
-import base64
-import time
 import urllib.parse
 from io import BytesIO
+from pathlib import Path
 from PIL import Image  # 需要安装 Pillow 库: pip install Pillow
 from dotenv import load_dotenv
 from tqdm import tqdm  # 用于显示进度条
 import gc
 import subprocess
 import glob
+from .logger import (log_step_start, log_step_complete, log_progress, log_info, 
+                    log_error, log_debug, log_api_start, log_api_success, log_api_error)
 
 
 # 加载环境变量
@@ -155,35 +141,53 @@ def save_error_message(error_msg: str, save_path: str):
     with open(save_path, "w", encoding="utf-8") as error_file:
         error_file.write(error_msg)
 
-# 根据ID获取小说文件和提示词列表
-def get_book_content(book_id: str):
-    # 读取目录下的所有json文件
-    storyboard_dir = f"data/book/{book_id}/storyboard"
+# 根据ID生成小说图片
+def generate_book_images(book_id: str):
+    """
+    生成書籍的所有章節圖片，使用Flux API
+    
+    Args:
+        book_id: 書籍ID
+    """
+    step_name = "圖片生成"
+    log_step_start(step_name, f"書籍ID: {book_id}")
+    start_time = time.time()
+    
+    # 使用pathlib处理路径
+    base_path = Path("data") / "book" / book_id
+    storyboard_dir = base_path / "storyboard"
 
-    if not os.path.exists(storyboard_dir):
+    if not storyboard_dir.exists():
+        log_error(f"分鏡目錄不存在: {storyboard_dir}")
         raise Exception(f"目录不存在: {storyboard_dir}")
 
+    log_info(f"開始處理分鏡目錄: {storyboard_dir}")
+    
     # 按照文件名排序
-    chapter_files = os.listdir(storyboard_dir)
-    chapter_files.sort(key=lambda x: int(x.split(".")[0]))
-    chapter_file_paths = [os.path.join(storyboard_dir, f) for f in chapter_files]
+    chapter_files = list(storyboard_dir.glob("*.json"))
+    chapter_files.sort(key=lambda x: int(x.stem))
+    
+    log_info(f"發現 {len(chapter_files)} 個章節分鏡文件")
 
     # 计算总进度
     total_items = 0
-    for chapter_file_path in chapter_file_paths:
-        with open(chapter_file_path, "r", encoding="utf-8") as f:
+    for chapter_file in chapter_files:
+        with open(chapter_file, "r", encoding="utf-8") as f:
             chapter_data = json.load(f)
             total_items += len(chapter_data)
+    
+    log_info(f"總共需要處理 {total_items} 個分鏡項目")
 
     # 创建总进度条
-    with tqdm(total=total_items, desc="总进度", unit="图") as pbar:
+    with tqdm(total=total_items, desc="圖片生成總進度", unit="圖") as pbar:
         # 处理每个章节文件
-        for chapter_file_path in chapter_file_paths:
-            # 获取完整的json文件名（不含路径）
-            json_filename = os.path.basename(chapter_file_path).split(".")[0]
+        for chapter_file in chapter_files:
+            chapter_name = chapter_file.stem
+            log_progress("章節圖片生成", chapter_files.index(chapter_file) + 1, len(chapter_files), 
+                        f"處理章節 {chapter_name}")
 
             # 读取章节数据
-            with open(chapter_file_path, "r", encoding="utf-8") as f:
+            with open(chapter_file, "r", encoding="utf-8") as f:
                 chapter_data = json.load(f)
                 # 根据 id字段从小到大排序
                 chapter_data.sort(key=lambda x: int(x["id"]))
@@ -199,150 +203,212 @@ def get_book_content(book_id: str):
                 # 获取提示词
                 if "lensLanguage_end" in item:
                     prompt = item["lensLanguage_end"]
+                    log_debug(f"處理分鏡 {item_id}, 原始提示詞長度: {len(prompt)} 字符")
+                    
                     # 使用逗号将他们分隔为数组
                     prompt = prompt.split(",")
                     # 从新将他们拼接为字符串,只取前30个 不足30个则全部取
                     prompt = ",".join(prompt[:30])
-                    # 修改图片保存目录结构：data/book/{book_id}/images/{json文件名}/{数据中的id}
-                    images_base_dir = f"data/book/{book_id}/images"
-                    json_file_dir = os.path.join(images_base_dir, json_filename)
-                    os.makedirs(json_file_dir, exist_ok=True)
+                    log_debug(f"分鏡 {item_id} 提示詞截取後長度: {len(prompt)} 字符")
+                    
+                    # 使用pathlib处理图片保存路径
+                    images_dir = base_path / "images" / chapter_name
+                    images_dir.mkdir(parents=True, exist_ok=True)
 
                     # 设置图片保存路径，使用.jpg后缀
-                    image_path = os.path.join(json_file_dir, f"{item_id}.jpg")
-                    error_path = os.path.join(json_file_dir, f"{item_id}.txt")
+                    image_path = images_dir / f"{item_id}.jpg"
+                    error_path = images_dir / f"{item_id}.txt"
 
                     # 如果图片已存在，跳过
-                    if os.path.exists(image_path):
+                    if image_path.exists():
                         # 检查是否需要更新JSON数据中的image_path字段
                         if "image_path" not in item:
-                            # 添加相对路径到JSON数据
-                            relative_image_path = f"data/book/{book_id}/images/{json_filename}/{item_id}.jpg"
+                            # 添加相对路径到JSON数据 - 使用pathlib确保跨平台兼容
+                            relative_image_path = str(images_dir.relative_to(Path.cwd()) / f"{item_id}.jpg")
                             item["image_path"] = relative_image_path
                             json_updated = True
+                            log_debug(f"更新分鏡 {item_id} 的圖片路徑: {relative_image_path}")
                         gc.collect()
                     else:
                         # 尝试生成图片，最多重试3次
                         retry_count = 0
                         success = False
                         error_msg = ""
+                        
+                        log_api_start("FLUX_IMAGE_GENERATION", details=f"分鏡 {item_id}")
 
                         while retry_count < 3 and not success:
                             try:
+                                log_debug(f"第 {retry_count + 1}/3 次嘗試生成分鏡 {item_id} 的圖片")
+                                
                                 # 生成图片 - Flux API returns bytes directly
                                 image_data = create_Image(prompt)
+                                log_debug(f"Flux API 返回圖片數據大小: {len(image_data)} 字節")
 
                                 # 保存图片
-                                save_result = save_image_data(image_data, image_path)
+                                save_result = save_image_data(image_data, str(image_path))
                                 del image_data
                                 gc.collect()
+                                
                                 if save_result is True:
                                     success = True
-                                    # 添加image_path字段到JSON数据
-                                    relative_image_path = f"data/book/{book_id}/images/{json_filename}/{item_id}.jpg"
+                                    log_api_success("FLUX_IMAGE_GENERATION", 
+                                                  details=f"分鏡 {item_id} 圖片生成成功")
+                                    
+                                    # 添加image_path字段到JSON数据 - 使用pathlib确保跨平台兼容
+                                    relative_image_path = str(images_dir.relative_to(Path.cwd()) / f"{item_id}.jpg")
                                     item["image_path"] = relative_image_path
                                     json_updated = True
+                                    log_debug(f"添加分鏡 {item_id} 的圖片路徑: {relative_image_path}")
                                     del save_result
                                     gc.collect()
                                 else:
-                                    error_msg = f"保存图片失败: {save_result}"
+                                    error_msg = f"保存圖片失敗: {save_result}"
+                                    log_error(f"分鏡 {item_id} 保存失敗: {save_result}")
                                     retry_count += 1
                                     time.sleep(1)  # 等待1秒后重试
                             except Exception as e:
-                                error_msg = (
-                                    f"生成图片失败 (尝试 {retry_count+1}/3): {str(e)}"
-                                )
+                                error_msg = f"生成圖片失敗 (嘗試 {retry_count+1}/3): {str(e)}"
+                                log_api_error("FLUX_IMAGE_GENERATION", str(e), 
+                                            retry_count=retry_count + 1, details=f"分鏡 {item_id}")
                                 retry_count += 1
                                 time.sleep(2)  # 等待2秒后重试
 
                         # 如果所有重试都失败，保存错误信息
                         if not success:
-                            save_error_message(error_msg, error_path)
+                            save_error_message(error_msg, str(error_path))
+                            log_error(f"分鏡 {item_id} 所有重試都失敗: {error_msg}")
+                else:
+                    log_error(f"分鏡 {item_id} 缺少 lensLanguage_end 字段，跳過圖片生成")
                 # 更新进度条
                 pbar.update(1)
                 # 定期释放内存
                 if item_idx % 10 == 0:
                     gc.collect()
-                # time.sleep(0.1)
+                    
             # 如果有更新，保存更新后的JSON文件
             if json_updated:
-                with open(chapter_file_path, "w", encoding="utf-8") as f:
+                with open(chapter_file, "w", encoding="utf-8") as f:
                     json.dump(chapter_data, f, ensure_ascii=False, indent=2)
+                log_info(f"更新了章節 {chapter_name} 的分鏡JSON文件")
+                
             # 每处理完一个章节，强制清理内存
             del chapter_data
             gc.collect()
+    
+    duration = time.time() - start_time
+    log_step_complete(step_name, duration, f"生成 {total_items} 個圖片")
+    log_info(f"圖片生成完成，耗時 {duration:.2f} 秒")
 
 
 def get_book_images(book_id: str):
+    """
+    對書籍圖片進行高清修復處理（如果啟用）
+    
+    Args:
+        book_id: 書籍ID
+    """
+    step_name = "圖片高清修復"
+    log_step_start(step_name, f"書籍ID: {book_id}")
+    start_time = time.time()
 
     # 新增：根據環境變數 UPSCALY_ENABLE 決定是否執行高清修復
-    upscaly_enable = os.getenv("UPSCALY_ENABLE", "true").lower() in ["true", "1", "yes"]
+    upscaly_enable = os.getenv("UPSCALY_ENABLE", "false").lower() in ["true", "1", "yes"]
+    log_info(f"高清修復設定: {'啟用' if upscaly_enable else '停用'}")
+    
+    if not upscaly_enable:
+        log_info("跳過圖片高清修復步驟")
+        return
 
-    # 获取 data/book/{book_id}/storyboard 目录下的所有json
-    storyboard_dir = f"data/book/{book_id}/storyboard"
-    chapter_files = os.listdir(storyboard_dir)
-    chapter_files.sort(key=lambda x: int(x.split(".")[0]))
-    chapter_file_paths = [os.path.join(storyboard_dir, f) for f in chapter_files]
+    # 使用pathlib处理路径
+    base_path = Path("data") / "book" / book_id
+    storyboard_dir = base_path / "storyboard"
+    
+    if not storyboard_dir.exists():
+        log_error(f"分鏡目錄不存在: {storyboard_dir}")
+        return
+    
+    # 获取所有json文件并排序
+    chapter_files = list(storyboard_dir.glob("*.json"))
+    chapter_files.sort(key=lambda x: int(x.stem))
+    
+    log_info(f"發現 {len(chapter_files)} 個章節文件")
 
     # 计算总进度
     total_items = 0
-    for chapter_file_path in chapter_file_paths:
-        with open(chapter_file_path, "r", encoding="utf-8") as f:
+    for chapter_file in chapter_files:
+        with open(chapter_file, "r", encoding="utf-8") as f:
             chapter_data = json.load(f)
             total_items += len(chapter_data)
+    
+    log_info(f"總共需要處理 {total_items} 個圖片")
 
     # 创建总进度条
-    with tqdm(total=total_items, desc="总进度", unit="图") as pbar:
+    with tqdm(total=total_items, desc="圖片高清修復進度", unit="圖") as pbar:
         # 遍历每个章节文件
-        for chapter_file_path in chapter_file_paths:
+        for chapter_file in chapter_files:
+            chapter_name = chapter_file.stem
+            log_progress("圖片高清修復", chapter_files.index(chapter_file) + 1, len(chapter_files), 
+                        f"處理章節 {chapter_name}")
+            
             # 读取章节数据
-            with open(chapter_file_path, "r", encoding="utf-8") as f:
+            with open(chapter_file, "r", encoding="utf-8") as f:
                 chapter_data = json.load(f)
                 # 根据 id字段从小到大排序
                 chapter_data.sort(key=lambda x: int(x["id"]))
                 # 遍历每个对象
                 for item in chapter_data:
                     if "image_path" in item:
-                        image_path = item["image_path"]
+                        image_path = Path(item["image_path"])
 
                         # 检查图片大小是否超过2MB
-                        if os.path.exists(image_path):
-                            file_size_mb = os.path.getsize(image_path) / (1024 * 1024)
+                        if image_path.exists():
+                            file_size_mb = image_path.stat().st_size / (1024 * 1024)
                             if file_size_mb > 2:
+                                log_debug(f"圖片 {image_path} 大小 {file_size_mb:.2f}MB，跳過處理")
                                 pbar.update(1)
                                 # 删除log文件
                                 delete_log_file()
                                 continue
 
-                        # 根據 UPSCALY_ENABLE 決定是否執行高清修復
-                        if upscaly_enable:
-                            upscale_result = upscale_image(image_path)
-                            if upscale_result is True:
-                                # 更新进度条
-                                pbar.update(1)
-                                # 删除log文件
-                                delete_log_file()
-                            else:
-                                # 重试
-                                retry_count = 0
-                                while retry_count < 3:
-                                    upscale_result = upscale_image(image_path)
-                                    if upscale_result is True:
-                                        # 更新进度条
-                                        pbar.update(1)
-                                        # 删除log文件
-                                        delete_log_file()
-                                        break
-                                    retry_count += 1
-                        else:
-                            # 不執行高清修復，僅更新進度條
+                        log_debug(f"處理圖片: {image_path}")
+                        upscale_result = upscale_image(str(image_path))
+                        if upscale_result is True:
+                            log_debug(f"圖片 {image_path} 高清修復成功")
+                            # 更新进度条
                             pbar.update(1)
+                            # 删除log文件
                             delete_log_file()
+                        else:
+                            # 重试
+                            retry_count = 0
+                            while retry_count < 3:
+                                log_debug(f"重試高清修復圖片 {image_path} (第 {retry_count + 1}/3 次)")
+                                upscale_result = upscale_image(str(image_path))
+                                if upscale_result is True:
+                                    log_debug(f"圖片 {image_path} 重試後高清修復成功")
+                                    # 更新进度条
+                                    pbar.update(1)
+                                    # 删除log文件
+                                    delete_log_file()
+                                    break
+                                retry_count += 1
+                            
+                            if retry_count >= 3:
+                                log_error(f"圖片 {image_path} 高清修復失敗，已重試 3 次")
+                                pbar.update(1)
+                    else:
+                        log_debug("跳過沒有圖片路徑的分鏡項目")
+                        pbar.update(1)
+    
+    duration = time.time() - start_time
+    log_step_complete(step_name, duration, f"處理 {total_items} 個圖片")
+    log_info(f"圖片高清修復完成，耗時 {duration:.2f} 秒")
             
 
 
 
 
 if __name__ == "__main__":
-    get_book_content("1043294775")
+    generate_book_images("1043294775")
     get_book_images("1043294775")

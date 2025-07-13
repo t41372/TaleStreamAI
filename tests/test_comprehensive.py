@@ -18,7 +18,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from app.main import get_book_content, extract_free_chapters, get_chapter_content, load_local_txt_file
 from app.board import generate_board, generate_board_json
-from app.image import create_Image, save_image_data, get_book_content as create_book_image
+from app.image import create_Image, save_image_data, generate_book_images
 from app.audio import create_book_audio, generate_audio
 from app.tts import create_tts
 from app.edge import EdgeTTSGenerator, generate_audio_with_edge_tts, sync_generate_audio_with_edge_tts
@@ -352,7 +352,7 @@ class TestImageModule:
                 json.dump(storyboard_data, f, ensure_ascii=False, indent=2)
             
             # Test image generation
-            create_book_image(book_id)
+            generate_book_images(book_id)
             
             # Check that image was created
             assert os.path.exists(f"data/book/{book_id}/images/0/1.jpg")
@@ -526,7 +526,7 @@ class TestEndToEndWorkflow:
             assert os.path.exists(f"data/book/{book_id}/storyboard")
             
             # Step 3: Generate images (mocked)
-            create_book_image(book_id)
+            generate_book_images(book_id)
             
             # Check that images were "generated"
             storyboard_files = os.listdir(f"data/book/{book_id}/storyboard")
@@ -594,14 +594,14 @@ class TestMainScript:
             yield temp_dir
     
     @patch('main.generate_board')
-    @patch('main.create_book_image')
+    @patch('main.generate_book_images')
     @patch('main.get_book_images')
     @patch('main.create_book_audio')
     @patch('main.create_tts')
     @patch('main.create_book_video')
     @patch('main.save_output_video')
     def test_main_function_workflow(self, mock_save_video, mock_create_video, mock_create_tts, 
-                                  mock_create_audio, mock_get_images, mock_create_image, 
+                                  mock_create_audio, mock_get_images, mock_generate_image, 
                                   mock_generate_board, temp_dir):
         """Test the main function workflow with all steps mocked."""
         # Set up mocks to return success
