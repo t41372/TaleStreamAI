@@ -10,7 +10,7 @@ import aiohttp
 from bs4 import BeautifulSoup
 
 from ..config import settings
-from ..logger import log_info, log_error, log_warning
+from loguru import logger
 from ..models import Chapter
 
 
@@ -25,7 +25,7 @@ async def _fetch_url(session: aiohttp.ClientSession, url: str) -> Optional[str]:
             response.raise_for_status()
             return await response.text()
     except aiohttp.ClientError as e:
-        log_error(f"网络请求失败: {url}, 错误: {e}")
+        logger.error(f"网络请求失败: {url}, 错误: {e}")
         return None
 
 
@@ -112,7 +112,7 @@ def _get_local_chapters(source_file: str, book_path: Path) -> list[Chapter]:
     """从本地TXT文件加载章节。"""
     source_path = Path(source_file)
     if not source_path.exists():
-        log_error(f"本地文件不存在: {source_file}")
+        logger.error(f"本地文件不存在: {source_file}")
         return []
 
     chapters_list_dir = book_path / "list"
@@ -140,7 +140,7 @@ def _get_local_chapters(source_file: str, book_path: Path) -> list[Chapter]:
             chapter_index += 1
 
     if not chapters:  # 如果没有匹配到 "第X章"，则将整个文件视为一章
-        log_warning("未在文件中找到 '第X章' 格式的章节标题，将整个文件视为一个章节。")
+        logger.warning("未在文件中找到 '第X章' 格式的章节标题，将整个文件视为一个章节。")
         chapter = Chapter(index=0, content=content)
         chapters.append(chapter)
         (chapters_list_dir / "0.txt").write_text(content, encoding="utf-8")
@@ -159,8 +159,8 @@ async def get_chapters(
     book_path.mkdir(exist_ok=True)
 
     if source_file:
-        log_info(f"从本地文件加载: {source_file}")
+        logger.info(f"从本地文件加载: {source_file}")
         return _get_local_chapters(source_file, book_path)
     else:
-        log_info(f"从网络获取书籍ID: {book_id}")
+        logger.info(f"从网络获取书籍ID: {book_id}")
         return await _get_remote_chapters(book_id, book_path)

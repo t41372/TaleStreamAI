@@ -11,7 +11,7 @@ from moviepy.editor import ImageClip, AudioFileClip, CompositeVideoClip
 from PIL import Image
 
 from ..config import settings
-from ..logger import log_info, log_error, log_debug, log_warning
+from loguru import logger
 from ..models import Shot
 from ..cache import image_cache, audio_cache
 
@@ -40,7 +40,7 @@ async def _fetch_image(prompt: str) -> bytes:
                 response.raise_for_status()
                 return await response.read()
         except aiohttp.ClientError as e:
-            log_error(
+            logger.error(
                 f"Image generation API request failed for prompt '{prompt[:30]}...': {e}"
             )
             raise
@@ -56,12 +56,12 @@ async def _generate_image_asset(shot: Shot, book_path: Path) -> Shot:
     shot.image_path = image_dir / f"{shot.shot_id}.jpg"
 
     if shot.image_path.exists():
-        log_debug(
+        logger.debug(
             f"Image already exists for shot {shot.get_full_id()}, skipping generation."
         )
         return shot
 
-    log_debug(f"Generating image for shot {shot.get_full_id()}...")
+    logger.debug(f"Generating image for shot {shot.get_full_id()}...")
     try:
         if not shot.image_prompt:
             raise ValueError("Image prompt is missing.")
@@ -70,7 +70,7 @@ async def _generate_image_asset(shot: Shot, book_path: Path) -> Shot:
             img.convert("RGB").save(shot.image_path, "JPEG", quality=95)
     except Exception as e:
         shot.error = f"Image generation failed: {e}"
-        log_error(f"Shot {shot.get_full_id()} failed during image generation: {e}")
+        logger.error(f"Shot {shot.get_full_id()} failed during image generation: {e}")
 
     return shot
 
@@ -87,7 +87,7 @@ async def _fetch_audio(text: str, voice: str) -> bytes:
                 audio_data += chunk["data"]
         return audio_data
     except Exception as e:
-        log_error(f"Edge-TTS generation failed for text '{text[:30]}...': {e}")
+        logger.error(f"Edge-TTS generation failed for text '{text[:30]}...': {e}")
         raise
 
 
@@ -102,12 +102,12 @@ async def _generate_audio_asset(shot: Shot, book_path: Path) -> Shot:
     shot.srt_path = shot.audio_path.with_suffix(".srt")  # srt logic to be added later
 
     if shot.audio_path.exists():
-        log_debug(
+        logger.debug(
             f"Audio already exists for shot {shot.get_full_id()}, skipping generation."
         )
         return shot
 
-    log_debug(f"Generating audio for shot {shot.get_full_id()}...")
+    logger.debug(f"Generating audio for shot {shot.get_full_id()}...")
     try:
         if not shot.original_text:
             raise ValueError("Original text for audio is missing.")
@@ -117,7 +117,7 @@ async def _generate_audio_asset(shot: Shot, book_path: Path) -> Shot:
         shot.srt_path.write_text("")
     except Exception as e:
         shot.error = f"Audio generation failed: {e}"
-        log_error(f"Shot {shot.get_full_id()} failed during audio generation: {e}")
+        logger.error(f"Shot {shot.get_full_id()} failed during audio generation: {e}")
 
     return shot
 
@@ -129,7 +129,7 @@ def _generate_video_clip_asset_sync(shot: Shot, book_path: Path) -> Shot:
     这个函数将在一个单独的进程中运行，以避免阻塞事件循环。
     """
     if shot.error or not shot.image_path or not shot.audio_path:
-        log_warning(
+        logger.warning(
             f"Skipping video clip for shot {shot.get_full_id()} due to previous errors or missing assets."
         )
         return shot
@@ -139,10 +139,10 @@ def _generate_video_clip_asset_sync(shot: Shot, book_path: Path) -> Shot:
     shot.video_clip_path = video_dir / f"{shot.shot_id}.mp4"
 
     if shot.video_clip_path.exists():
-        log_debug(f"Video clip exists for shot {shot.get_full_id()}, skipping.")
+        logger.debug(f"Video clip exists for shot {shot.get_full_id()}, skipping.")
         return shot
 
-    log_debug(f"Synthesizing video for shot {shot.get_full_id()}...")
+    logger.debug(f"Synthesizing video for shot {shot.get_full_id()}...")
     try:
         # Validate assets exist before processing
         if not shot.audio_path.exists() or not shot.image_path.exists():
@@ -183,9 +183,8 @@ def _generate_video_clip_asset_sync(shot: Shot, book_path: Path) -> Shot:
             )
     except Exception as e:
         shot.error = f"Video synthesis failed: {e}"
-        log_error(
-            f"Shot {shot.get_full_id()} failed during video synthesis: {e}",
-            exc_info=True,
+        logger.exception(
+            f"Shot {shot.get_full_id()} failed during video synthesis"
         )
 
     return shot
@@ -200,7 +199,7 @@ async def generate_all_assets(
     并发生成所有镜头的图片和音频，然后将视频合成任务分派到进程池。
     """
     # 步骤 1: 并发生成所有I/O密集型资产（图片和音频）
-    log_info(
+    logger.info(
         f"Starting parallel generation of I/O-bound assets (image, audio) for {len(shots)} shots..."
     )
 
@@ -212,7 +211,7 @@ async def generate_all_assets(
     await asyncio.gather(*image_tasks, *audio_tasks)
 
     # 步骤 2: 将CPU密集型任务（视频合成）提交到进程池
-    log_info("Scheduling CPU-bound assets (video clips) to process pool...")
+    logger.info("Scheduling CPU-bound assets (video clips) to process pool...")
     loop = asyncio.get_event_loop()
     cpu_tasks = []
     for shot in shots:

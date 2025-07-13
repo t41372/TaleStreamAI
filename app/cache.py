@@ -7,7 +7,7 @@ from typing import Callable
 from functools import wraps
 
 from .config import settings
-from .logger import log_debug
+from loguru import logger
 
 
 def _generate_cache_key(func: Callable, *args, **kwargs) -> str:
@@ -51,7 +51,7 @@ def cache(cache_path: Path, result_type: str = "text"):
 
             # 检查缓存是否存在
             if cache_file.exists():
-                log_debug(
+                logger.debug(
                     f"✅ 缓存命中: {func.__name__} (key: {cache_key[:8]}...), 从 {cache_file} 读取"
                 )
                 if result_type == "binary":
@@ -60,7 +60,7 @@ def cache(cache_path: Path, result_type: str = "text"):
                     return cache_file.read_text(encoding="utf-8")
 
             # 执行函数并获取结果
-            log_debug(
+            logger.debug(
                 f"❌ 缓存未命中: {func.__name__} (key: {cache_key[:8]}...), 执行函数"
             )
             result = await func(*args, **kwargs)
@@ -72,7 +72,7 @@ def cache(cache_path: Path, result_type: str = "text"):
                     cache_file.write_bytes(result)
                 else:
                     cache_file.write_text(str(result), encoding="utf-8")
-                log_debug(f"📝 结果已缓存至: {cache_file}")
+                logger.debug(f"📝 结果已缓存至: {cache_file}")
 
             return result
 

@@ -21,7 +21,7 @@ from openai import (
 from openai.types.chat import ChatCompletionChunk, ChatCompletionMessageParam
 
 from .config import LLMConfig, settings
-from .logger import log_error, log_info, log_debug
+from loguru import logger
 from .cache import llm_cache
 
 
@@ -53,7 +53,7 @@ class UnifiedLLMClient:
         """
         执行非流式聊天补全，利用缓存。
         """
-        log_debug(f"Executing non-streamed chat completion for model {self.config.model}")
+        logger.debug(f"Executing non-streamed chat completion for model {self.config.model}")
         # We dump the messages to a JSON string because a list of dicts is not hashable,
         # which is required by our caching decorator.
         messages_json = json.dumps(messages)
@@ -66,7 +66,7 @@ class UnifiedLLMClient:
         执行异步流式聊天补全，带信号量控制。
         """
         async with self.semaphore:
-            log_debug(f"Semaphore acquired for {self.config.model}. Executing stream...")
+            logger.debug(f"Semaphore acquired for {self.config.model}. Executing stream...")
             async for chunk in self._stream_implementation(messages, system):
                 yield chunk
 
@@ -76,7 +76,7 @@ class UnifiedLLMClient:
         """
         核心流式实现，包含详细日志和用户反馈。
         """
-        log_debug(f"System prompt: {system}")
+        logger.debug(f"System prompt: {system}")
 
         # 为每个 LLM 调用创建一个独特的 emoji 和随机数
         random_emoji = random.choice(EMOJI_LIST)
@@ -108,7 +108,7 @@ class UnifiedLLMClient:
                 total_tokens = sum(
                     len(encoding.encode(m["content"])) for m in final_messages if m.get("content")
                 )
-                print(f" 总 token 数: {total_tokens}\n\n")
+                print(f"⭐️ 总 token 数: {total_tokens}\n")
 
                 sys.stdout.flush()
 
@@ -139,25 +139,25 @@ class UnifiedLLMClient:
                 return  # 成功完成，退出重试循环
 
             except (APIConnectionError, RateLimitError, APIError, RemoteProtocolError) as e:
-                log_info(
+                logger.info(
                     f"LLM API Error on attempt {attempt + 1}/{max_retries} for model {self.config.model}: {e}"
                 )
                 if attempt < max_retries - 1:
                     wait_time = 2**attempt
-                    log_info(f"Retrying in {wait_time}s...")
+                    logger.info(f"Retrying in {wait_time}s...")
                     await asyncio.sleep(wait_time)
                 else:
-                    log_error(
+                    logger.error(
                         f"LLM call failed after {max_retries} attempts for model {self.config.model}."
                     )
                     yield f"ERROR: LLM call failed. {e}"
             finally:
                 if stream:
                     await stream.close()
-                    log_debug(f"LLM Stream closed for call {call_id}.")
+                    logger.debug(f"LLM Stream closed for call {call_id}.")
 
         # 如果所有重试都失败了，确保有一个最终的错误信息
-        log_error(f"LLM call {call_id} failed completely after all retries.")
+        logger.error(f"LLM call {call_id} failed completely after all retries.")
 
 
 # 全局客户端实例
@@ -166,19 +166,19 @@ prompt_client = UnifiedLLMClient(settings.prompt_llm)
 
 
 async def test_llm_connections():
-    log_info("Testing LLM connections...")
+    logger.info("Testing LLM connections...")
     test_messages = [{"role": "user", "content": "Hello!"}]
 
-    log_info("Testing Storyboard Client...")
+    logger.info("Testing Storyboard Client...")
     storyboard_response = await storyboard_client.chat_completion(test_messages)
     if "ERROR" in storyboard_response:
-        log_error("Storyboard client test FAILED.")
+        logger.error("Storyboard client test FAILED.")
     else:
-        log_info(f"Storyboard client test OK. Response: {storyboard_response[:50]}...")
+        logger.info(f"Storyboard client test OK. Response: {storyboard_response[:50]}...")
 
-    log_info("Testing Prompt Client...")
+    logger.info("Testing Prompt Client...")
     prompt_response = await prompt_client.chat_completion(test_messages)
     if "ERROR" in prompt_response:
-        log_error("Prompt client test FAILED.")
+        logger.error("Prompt client test FAILED.")
     else:
-        log_info(f"Prompt client test OK. Response: {prompt_response[:50]}...")
+        logger.info(f"Prompt client test OK. Response: {prompt_response[:50]}...")

@@ -2,15 +2,33 @@
 import asyncio
 import argparse
 from pathlib import Path
+import os
+import sys
+
+from loguru import logger
 
 from app.config import settings
-from app.logger import log_info, log_error
 from app.llm_client import test_llm_connections
 from app.pipeline import Pipeline
 
 
 async def main():
     """主异步函数，协调整个工作流"""
+    # --- Loguru Configuration ---
+    logger.remove()
+    log_level = "DEBUG" if os.getenv("VERBOSE_LOGGING", "true").lower() == "true" else "INFO"
+    logger.add(
+        sys.stderr,
+        level=log_level,
+        format=(
+            "<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> | "
+            "<level>{level: <8}</level> | "
+            "<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>"
+        ),
+        colorize=True,
+    )
+    # --- End Loguru Configuration ---
+
     parser = argparse.ArgumentParser(
         description="TaleStreamAI - 自动化小说转视频工作流"
     )
@@ -52,7 +70,7 @@ async def main():
         else:
             final_book_id = args.source
 
-    log_info(f"🚀 工作流启动，书籍ID: {final_book_id}")
+    logger.info(f"🚀 工作流启动，书籍ID: {final_book_id}")
 
     # 初始化并运行流水线
     pipeline = Pipeline(
@@ -62,9 +80,9 @@ async def main():
 
     try:
         await pipeline.run()
-        log_info("🎉 工作流全部阶段成功完成！")
+        logger.info("🎉 工作流全部阶段成功完成！")
     except Exception as e:
-        log_error(f"工作流执行过程中发生未捕获的严重错误: {e}", exc_info=True)
+        logger.exception(f"工作流执行过程中发生未捕获的严重错误: {e}")
 
 
 if __name__ == "__main__":

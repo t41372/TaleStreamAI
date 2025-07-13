@@ -1,10 +1,10 @@
-This file is a merged representation of the entire codebase, combined into a single document by Repomix.
+This file is a merged representation of a subset of the codebase, containing files not matching ignore patterns, combined into a single document by Repomix.
 
 <file_summary>
 This section contains a summary of this file.
 
 <purpose>
-This file contains a packed representation of the entire repository's contents.
+This file contains a packed representation of a subset of the repository's contents that is considered the most important context.
 It is designed to be easily consumable by AI systems for analysis, code review,
 or other automated processes.
 </purpose>
@@ -32,6 +32,7 @@ The content is organized as follows:
 <notes>
 - Some files may have been excluded based on .gitignore rules and Repomix's configuration
 - Binary files are not included in this packed representation. Please refer to the Repository Structure section for a complete list of file paths, including binary files
+- Files matching these patterns are excluded: test_novel.txt, LICENSE
 - Files matching patterns in .gitignore are excluded
 - Files matching default ignore patterns are excluded
 - Files are sorted by Git change count (files with more changes are at the bottom)
@@ -55,19 +56,208 @@ app/
   models.py
   pipeline.py
   tool.py
-.env.example
+.env_old
+.env.sample
 .gitignore
 .python-version
-LICENSE
-prompt.txt
 pyproject.toml
 README.md
 run.py
-test_novel.txt
 </directory_structure>
 
 <files>
 This section contains the contents of the repository's files.
+
+<file path=".env_old">
+COOKIE=
+
+# 大模型配置 - OpenAI兼容格式
+# 用於分鏡生成的模型配置
+STORYBOARD_API_KEY=sk-T9Ki5vObbywYlNc6lda4dx6rVCvoRf3Y3R8zyIQA3IBdhofG
+STORYBOARD_API_URL=https://tbai.xin/v1
+STORYBOARD_MODEL=deepseek-r1
+
+# 用於圖片提示詞生成的模型配置
+PROMPT_API_KEY=sk-T9Ki5vObbywYlNc6lda4dx6rVCvoRf3Y3R8zyIQA3IBdhofG
+PROMPT_API_URL=https://tbai.xin/v1
+PROMPT_MODEL=deepseek-v3
+
+# LLM 並發配置
+# LLM API 最大並發數
+LLM_THREADS=50
+# LLM API 請求超時時間(秒)
+LLM_TIMEOUT=120
+# LLM API 重試次數
+LLM_RETRY_ATTEMPTS=3
+# 是否開啟詳細日誌
+VERBOSE_LOGGING=true
+
+# 備用：阿里雲通義千問配置 (兼容模式)
+AL_API_KEY=jojokey
+AL_API_URL=https://small-worm-50.deno.dev/api/v1
+
+# 備用：Gemini API配置
+GEMINI_API_KEY=
+GEMINI_API_URL=https://generativelanguage.googleapis.com/v1beta/openai/
+
+# 文生图配置 - 使用 Flux API
+FLUX_WIDTH=1024
+FLUX_HEIGHT=768
+FLUX_MODEL=flux
+FLUX_SEED=
+FLUX_ENHANCE=false
+
+# 高清修复配置
+UPSCALY_ENABLE=false
+UPSCAYL_SCALE=4
+UPSCAYL_MODEL=realesr-animevideov3-x4
+UPSCALY_FILE_TYPE=jpg
+
+# Edge TTS 配置
+# Edge TTS 语音
+EDGE_TTS_VOICE=zh-CN-YunxiNeural
+# 音频生成最大并发数
+AUDIO_THREADS=5
+# 是否使用异步音频生成
+USE_ASYNC_AUDIO=true
+
+# 分段视频生成配置
+# 视频生成线程数
+VIDEO_THREADS=4         
+# 是否是竖屏模式
+PORTRAIT_MODE=True
+# 视频宽度
+VIDEO_WIDTH=1080
+# 视频高度
+VIDEO_HEIGHT=1920
+# 移动距离 倍率
+MOVE_DISTANCE=0.2
+# 移动速度
+MOVE_SPEED=1.0
+# 入场效果
+ENTRANCE_EFFECT=True
+# 入场持续时间
+ENTRANCE_DURATION=0.2
+# 音频速度 (效果不好)
+AUDIO_SPEED=1.0
+</file>
+
+<file path=".env.sample">
+# -----------------------------------------------------------------------------
+# 通用设置 (General Settings)
+# -----------------------------------------------------------------------------
+
+# 书籍来源：可以是起点ID或本地.txt文件路径 (默认为: test_novel.txt)
+BOOK_SOURCE=test_novel.txt
+
+# 为本地文件指定一个自定义的书籍ID (默认为文件名)，用于区分不同的项目文件夹
+# CUSTOM_BOOK_ID=my-epic-story
+
+# 如果需要爬取需要登录的网站（如起点），请在此填入你的Cookie
+COOKIE=
+
+# -----------------------------------------------------------------------------
+# 大语言模型 (LLM) - 分镜生成 (Storyboard Generation)
+# -----------------------------------------------------------------------------
+# 用于将小说原文转换成结构化分镜脚本的LLM
+
+STORYBOARD_API_KEY=<api_key>
+STORYBOARD_API_URL=https://tbai.xin/v1
+STORYBOARD_MODEL=deepseek-r1
+
+# 分镜LLM处理文本时，用于分块的最大token数 (默认为: 8000)
+# 根据你使用的模型上下文窗口大小进行调整
+STORYBOARD_MAX_TOKENS=4000
+
+# -----------------------------------------------------------------------------
+# 大语言模型 (LLM) - 提示词优化 (Prompt Refinement)
+# -----------------------------------------------------------------------------
+# 用于将中文镜头语言优化成高质量英文AI绘画提示词的LLM
+
+PROMPT_API_KEY=<api_key>
+PROMPT_API_URL=https://tbai.xin/v1
+PROMPT_MODEL=deepseek-v3
+
+# 提示词优化LLM的最大token数 (默认为: 8000)
+# PROMPT_MAX_TOKENS=8000
+
+# -----------------------------------------------------------------------------
+# 大语言模型 (LLM) - 性能与网络 (Performance & Network)
+# -----------------------------------------------------------------------------
+
+# 所有LLM API调用的最大并发线程数 (默认为: 3)
+LLM_THREADS=30
+
+# LLM API 请求超时时间(秒) (默认为: 120)
+LLM_TIMEOUT=120
+
+# LLM API 请求失败后的重试次数 (默认为: 3)
+LLM_RETRY_ATTEMPTS=3
+
+# -----------------------------------------------------------------------------
+# 图像生成 (Image Generation)
+# -----------------------------------------------------------------------------
+
+# 生成图片的宽度 (默认为: 1024)
+IMAGE_WIDTH=1024
+
+# 生成图片的高度 (默认为: 1024)
+IMAGE_HEIGHT=1440
+
+# 全局追加到每个图像提示词后的风格修饰词
+IMAGE_STYLE_PROMPT="cinematic, anime sytle, lighting, detailed, illustration, 8k"
+
+# -----------------------------------------------------------------------------
+# 音频生成 (Audio Generation)
+# -----------------------------------------------------------------------------
+
+# Edge TTS 使用的语音 (默认为: zh-CN-YunxiNeural)
+EDGE_TTS_VOICE=zh-CN-YunxiNeural
+
+# 音频生成任务的最大并发数 (默认为: 5)
+AUDIO_THREADS=5
+
+# -----------------------------------------------------------------------------
+# 视频合成 (Video Synthesis)
+# -----------------------------------------------------------------------------
+
+# 使用moviepy合成视频片段时的线程数 (默认为: 4)
+VIDEO_THREADS=4
+
+# 最终视频的宽度 (默认为: 750)
+VIDEO_WIDTH=1080
+
+# 最终视频的高度 (默认为: 1280)
+VIDEO_HEIGHT=1920
+
+# -----------------------------------------------------------------------------
+# 系统与日志 (System & Logging)
+# -----------------------------------------------------------------------------
+
+# 是否开启详细日志 (true/false) (默认为: true)
+VERBOSE_LOGGING=true
+</file>
+
+<file path=".gitignore">
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+data/book/
+
+.mp4
+.env
+</file>
+
+<file path=".python-version">
+3.12
+</file>
 
 <file path="app/stages/__init__.py">
 # This file makes the 'stages' directory a Python package.
@@ -75,13 +265,12 @@ This section contains the contents of the repository's files.
 
 <file path="app/stages/assets.py">
 # app/stages/assets.py
-import asyncio
 import io
 import os
-import aiohttp
-import urllib.parse
-from concurrent.futures import ProcessPoolExecutor
+import asyncio
 from pathlib import Path
+from concurrent.futures import ProcessPoolExecutor
+import aiohttp
 
 import edge_tts
 from moviepy.editor import ImageClip, AudioFileClip, CompositeVideoClip
@@ -92,6 +281,7 @@ from ..logger import log_info, log_error, log_debug, log_warning
 from ..models import Shot
 from ..cache import image_cache, audio_cache
 
+
 # --- Image Generation ---
 @image_cache
 async def _fetch_image(prompt: str) -> bytes:
@@ -100,36 +290,42 @@ async def _fetch_image(prompt: str) -> bytes:
     # encoded_prompt = urllib.parse.quote(prompt)
     # url = (f"https://image.pollinations.ai/prompt/{encoded_prompt}"
     #        f"?width={settings.image_width}&height={settings.image_height}&nologo=true")
-    
+
     # Using a different free API that seems more stable for direct use
     url = "https://flux.fails.network/image/generator"
     payload = {
         "prompt": prompt,
         "width": settings.image_width,
         "height": settings.image_height,
-        "style": "anime" # Corresponds to our desired style
+        "style": "anime",  # Corresponds to our desired style
     }
-    
+
     async with aiohttp.ClientSession() as session:
         try:
             async with session.post(url, json=payload, timeout=300) as response:
                 response.raise_for_status()
                 return await response.read()
         except aiohttp.ClientError as e:
-            log_error(f"Image generation API request failed for prompt '{prompt[:30]}...': {e}")
+            log_error(
+                f"Image generation API request failed for prompt '{prompt[:30]}...': {e}"
+            )
             raise
+
 
 async def _generate_image_asset(shot: Shot, book_path: Path) -> Shot:
     """生成单个镜头的图片资产"""
-    if shot.error: return shot
-    
+    if shot.error:
+        return shot
+
     image_dir = book_path / "images" / str(shot.chapter_index)
     image_dir.mkdir(parents=True, exist_ok=True)
     shot.image_path = image_dir / f"{shot.shot_id}.jpg"
-    
+
     if shot.image_path.exists():
-         log_debug(f"Image already exists for shot {shot.get_full_id()}, skipping generation.")
-         return shot
+        log_debug(
+            f"Image already exists for shot {shot.get_full_id()}, skipping generation."
+        )
+        return shot
 
     log_debug(f"Generating image for shot {shot.get_full_id()}...")
     try:
@@ -141,8 +337,9 @@ async def _generate_image_asset(shot: Shot, book_path: Path) -> Shot:
     except Exception as e:
         shot.error = f"Image generation failed: {e}"
         log_error(f"Shot {shot.get_full_id()} failed during image generation: {e}")
-        
+
     return shot
+
 
 # --- Audio Generation ---
 @audio_cache
@@ -159,17 +356,21 @@ async def _fetch_audio(text: str, voice: str) -> bytes:
         log_error(f"Edge-TTS generation failed for text '{text[:30]}...': {e}")
         raise
 
+
 async def _generate_audio_asset(shot: Shot, book_path: Path) -> Shot:
     """生成单个镜头的音频资产"""
-    if shot.error: return shot
+    if shot.error:
+        return shot
 
     audio_dir = book_path / "audio" / str(shot.chapter_index)
     audio_dir.mkdir(parents=True, exist_ok=True)
     shot.audio_path = audio_dir / f"{shot.shot_id}.mp3"
-    shot.srt_path = shot.audio_path.with_suffix(".srt") # srt logic to be added later
+    shot.srt_path = shot.audio_path.with_suffix(".srt")  # srt logic to be added later
 
     if shot.audio_path.exists():
-        log_debug(f"Audio already exists for shot {shot.get_full_id()}, skipping generation.")
+        log_debug(
+            f"Audio already exists for shot {shot.get_full_id()}, skipping generation."
+        )
         return shot
 
     log_debug(f"Generating audio for shot {shot.get_full_id()}...")
@@ -186,6 +387,7 @@ async def _generate_audio_asset(shot: Shot, book_path: Path) -> Shot:
 
     return shot
 
+
 # --- Video Clip Generation (CPU-Bound) ---
 def _generate_video_clip_asset_sync(shot: Shot, book_path: Path) -> Shot:
     """
@@ -193,9 +395,11 @@ def _generate_video_clip_asset_sync(shot: Shot, book_path: Path) -> Shot:
     这个函数将在一个单独的进程中运行，以避免阻塞事件循环。
     """
     if shot.error or not shot.image_path or not shot.audio_path:
-        log_warning(f"Skipping video clip for shot {shot.get_full_id()} due to previous errors or missing assets.")
+        log_warning(
+            f"Skipping video clip for shot {shot.get_full_id()} due to previous errors or missing assets."
+        )
         return shot
-        
+
     video_dir = book_path / "video" / str(shot.chapter_index)
     video_dir.mkdir(parents=True, exist_ok=True)
     shot.video_clip_path = video_dir / f"{shot.shot_id}.mp4"
@@ -203,63 +407,76 @@ def _generate_video_clip_asset_sync(shot: Shot, book_path: Path) -> Shot:
     if shot.video_clip_path.exists():
         log_debug(f"Video clip exists for shot {shot.get_full_id()}, skipping.")
         return shot
-    
+
     log_debug(f"Synthesizing video for shot {shot.get_full_id()}...")
     try:
         # Validate assets exist before processing
         if not shot.audio_path.exists() or not shot.image_path.exists():
-             raise FileNotFoundError(f"Missing audio or image file for shot {shot.get_full_id()}")
+            raise FileNotFoundError(
+                f"Missing audio or image file for shot {shot.get_full_id()}"
+            )
 
-        with AudioFileClip(str(shot.audio_path)) as audio_clip, \
-             ImageClip(str(shot.image_path)).set_duration(audio_clip.duration) as image_clip:
-            
+        with (
+            AudioFileClip(str(shot.audio_path)) as audio_clip,
+            ImageClip(str(shot.image_path)).set_duration(
+                audio_clip.duration
+            ) as image_clip,
+        ):
             # Simple zoom-in effect (Ken Burns)
             final_size = (settings.video_width, settings.video_height)
-            
+
             # Resize image to be slightly larger than final dimensions for zoom
-            zoomed_image = image_clip.resize(height=int(final_size[1] * 1.15)).set_position(("center", "center"))
-            
+            zoomed_image = image_clip.resize(
+                height=int(final_size[1] * 1.15)
+            ).set_position(("center", "center"))
+
             # Animate the zoom over the duration of the clip
-            final_video = zoomed_image.resize(lambda t: 1 + 0.15 * (1 - t / audio_clip.duration))
+            final_video = zoomed_image.resize(
+                lambda t: 1 + 0.15 * (1 - t / audio_clip.duration)
+            )
             final_video = final_video.set_position(("center", "center"))
 
             final_clip = CompositeVideoClip([final_video], size=final_size)
             final_clip = final_clip.set_audio(audio_clip)
 
             final_clip.write_videofile(
-                str(shot.video_clip_path), 
-                fps=24, 
-                codec="libx264", # Use a more compatible encoder
+                str(shot.video_clip_path),
+                fps=24,
+                codec="libx264",  # Use a more compatible encoder
                 threads=os.cpu_count() or 2,
                 logger=None,
-                preset='ultrafast' # Prioritize speed over quality for clip generation
+                preset="ultrafast",  # Prioritize speed over quality for clip generation
             )
     except Exception as e:
         shot.error = f"Video synthesis failed: {e}"
-        log_error(f"Shot {shot.get_full_id()} failed during video synthesis: {e}", exc_info=True)
-        
+        log_error(
+            f"Shot {shot.get_full_id()} failed during video synthesis: {e}",
+            exc_info=True,
+        )
+
     return shot
+
 
 # --- Main Orchestrator ---
 async def generate_all_assets(
-    shots: list[Shot], 
-    book_path: Path,
-    process_executor: ProcessPoolExecutor
+    shots: list[Shot], book_path: Path, process_executor: ProcessPoolExecutor
 ) -> list[Shot]:
     """
     资产生成阶段的主函数。
     并发生成所有镜头的图片和音频，然后将视频合成任务分派到进程池。
     """
     # 步骤 1: 并发生成所有I/O密集型资产（图片和音频）
-    log_info(f"Starting parallel generation of I/O-bound assets (image, audio) for {len(shots)} shots...")
-    
+    log_info(
+        f"Starting parallel generation of I/O-bound assets (image, audio) for {len(shots)} shots..."
+    )
+
     # We create image and audio tasks separately to handle potential errors gracefully
     image_tasks = [_generate_image_asset(shot, book_path) for shot in shots]
     audio_tasks = [_generate_audio_asset(shot, book_path) for shot in shots]
 
     # Await both sets of I/O tasks
     await asyncio.gather(*image_tasks, *audio_tasks)
-    
+
     # 步骤 2: 将CPU密集型任务（视频合成）提交到进程池
     log_info("Scheduling CPU-bound assets (video clips) to process pool...")
     loop = asyncio.get_event_loop()
@@ -268,15 +485,15 @@ async def generate_all_assets(
         # run_in_executor 在一个指定的执行器（这里是进程池）中运行函数
         task = loop.run_in_executor(
             process_executor,
-            _generate_video_clip_asset_sync, # 必须是同步函数
+            _generate_video_clip_asset_sync,  # 必须是同步函数
             shot,
-            book_path
+            book_path,
         )
         cpu_tasks.append(task)
-    
+
     # 等待所有视频片段合成任务完成
     processed_shots = await asyncio.gather(*cpu_tasks)
-    
+
     return list(processed_shots)
 </file>
 
@@ -287,15 +504,15 @@ import json
 import os
 import re
 from pathlib import Path
-from typing import Optional, List
+from typing import Optional
 
 import aiohttp
 from bs4 import BeautifulSoup
-from tqdm import tqdm
 
 from ..config import settings
 from ..logger import log_info, log_error, log_warning
 from ..models import Chapter
+
 
 async def _fetch_url(session: aiohttp.ClientSession, url: str) -> Optional[str]:
     """异步获取URL内容。"""
@@ -311,6 +528,7 @@ async def _fetch_url(session: aiohttp.ClientSession, url: str) -> Optional[str]:
         log_error(f"网络请求失败: {url}, 错误: {e}")
         return None
 
+
 def _parse_chapters_from_html(html_content: str) -> list[dict]:
     """从目录页HTML中解析章节列表。"""
     soup = BeautifulSoup(html_content, "html.parser")
@@ -322,18 +540,21 @@ def _parse_chapters_from_html(html_content: str) -> list[dict]:
     for item in volume_chapters.find_all("li", class_="chapter-item"):
         link = item.find("a", class_="chapter-name")
         if link and (href := link.get("href")):
-            title = re.sub(r'\\s+', ' ', link.get_text(strip=True))
+            title = re.sub(r"\\s+", " ", link.get_text(strip=True))
             # 提取章节ID和名称
             match = re.search(r"^(第\\d+章)", title)
             chapter_id = match.group(1) if match else ""
-            chapter_name = title[len(chapter_id):].strip()
+            chapter_name = title[len(chapter_id) :].strip()
 
-            chapters.append({
-                "id": chapter_id,
-                "name": chapter_name or title,
-                "url": "https:" + href if href.startswith("//") else href
-            })
+            chapters.append(
+                {
+                    "id": chapter_id,
+                    "name": chapter_name or title,
+                    "url": "https:" + href if href.startswith("//") else href,
+                }
+            )
     return chapters
+
 
 async def _get_remote_chapters(book_id: str, book_path: Path) -> list[Chapter]:
     """从网络获取小说内容。"""
@@ -355,7 +576,9 @@ async def _get_remote_chapters(book_id: str, book_path: Path) -> list[Chapter]:
         for i, info in enumerate(chapter_infos):
             chapter_file = chapters_list_dir / f"{i}.txt"
             if not chapter_file.exists():
-                tasks.append(_fetch_and_save_chapter(session, info['url'], chapter_file))
+                tasks.append(
+                    _fetch_and_save_chapter(session, info["url"], chapter_file)
+                )
 
         results = await asyncio.gather(*tasks)
 
@@ -365,6 +588,7 @@ async def _get_remote_chapters(book_id: str, book_path: Path) -> list[Chapter]:
                 chapters.append(Chapter(index=i, content=content))
 
     return chapters
+
 
 async def _fetch_and_save_chapter(session: aiohttp.ClientSession, url: str, path: Path):
     """获取单个章节内容并保存。"""
@@ -378,7 +602,7 @@ async def _fetch_and_save_chapter(session: aiohttp.ClientSession, url: str, path
         return None
 
     paragraphs = [p.get_text(strip=True) for p in main_content.find_all("p")]
-    content = "\\n".join(filter(None, paragraphs))
+    content = "\n".join(filter(None, paragraphs))
 
     path.write_text(content, encoding="utf-8")
     return content
@@ -396,7 +620,7 @@ def _get_local_chapters(source_file: str, book_path: Path) -> list[Chapter]:
 
     content = source_path.read_text(encoding="utf-8")
     # 按 "第X章" 分割，保留分隔符
-    raw_chunks = re.split(r'(第\\d+章.*)', content)
+    raw_chunks = re.split(r"(第\\d+章.*)", content)
 
     chapters = []
     chapter_index = 0
@@ -404,24 +628,29 @@ def _get_local_chapters(source_file: str, book_path: Path) -> list[Chapter]:
     # 第一个块是标题前的任何内容，通常忽略
     # 从索引1开始，步长为2，来获取 (标题, 内容) 对
     for i in range(1, len(raw_chunks), 2):
-        title = raw_chunks[i].strip()
-        text = raw_chunks[i+1].strip()
+        # title = raw_chunks[i].strip()
+        text = raw_chunks[i + 1].strip()
         if text:
             chapter = Chapter(index=chapter_index, content=text)
             chapters.append(chapter)
             # 将分割好的章节内容写入文件，以便后续步骤可以统一处理
-            (chapters_list_dir / f"{chapter_index}.txt").write_text(text, encoding="utf-8")
+            (chapters_list_dir / f"{chapter_index}.txt").write_text(
+                text, encoding="utf-8"
+            )
             chapter_index += 1
 
-    if not chapters: # 如果没有匹配到 "第X章"，则将整个文件视为一章
+    if not chapters:  # 如果没有匹配到 "第X章"，则将整个文件视为一章
         log_warning("未在文件中找到 '第X章' 格式的章节标题，将整个文件视为一个章节。")
         chapter = Chapter(index=0, content=content)
         chapters.append(chapter)
-        (chapters_list_dir / f"0.txt").write_text(content, encoding="utf-8")
+        (chapters_list_dir / "0.txt").write_text(content, encoding="utf-8")
 
     return chapters
 
-async def get_chapters(book_id: str, source_file: Optional[str] = None) -> list[Chapter]:
+
+async def get_chapters(
+    book_id: str, source_file: Optional[str] = None
+) -> list[Chapter]:
     """
     内容获取阶段的主函数。
     根据输入源（网络或本地）获取所有章节内容。
@@ -450,6 +679,7 @@ from ..config import settings
 from ..logger import log_info, log_error, log_debug, log_warning
 from ..models import Shot
 
+
 async def _merge_srt_files(sorted_shots: list[Shot], output_srt_path: Path):
     """异步合并所有SRT文件，并校正时间戳。"""
     log_info("🚀 开始合并SRT字幕文件...")
@@ -468,13 +698,19 @@ async def _merge_srt_files(sorted_shots: list[Shot], output_srt_path: Path):
             with VideoFileClip(str(shot.video_clip_path)) as clip:
                 duration = timedelta(seconds=clip.duration)
         except Exception as e:
-            log_warning(f"无法获取视频时长 {shot.video_clip_path.name}: {e}, 跳过此片段的字幕处理。")
+            log_warning(
+                f"无法获取视频时长 {shot.video_clip_path.name}: {e}, 跳过此片段的字幕处理。"
+            )
             continue
 
         # 处理SRT文件
-        if shot.srt_path and shot.srt_path.exists() and shot.srt_path.stat().st_size > 0:
+        if (
+            shot.srt_path
+            and shot.srt_path.exists()
+            and shot.srt_path.stat().st_size > 0
+        ):
             try:
-                content = shot.srt_path.read_text('utf-8')
+                content = shot.srt_path.read_text("utf-8")
                 subs = list(srt.parse(content))
                 for sub in subs:
                     sub.start += cumulative_duration
@@ -482,7 +718,9 @@ async def _merge_srt_files(sorted_shots: list[Shot], output_srt_path: Path):
                     sub.index = subtitle_index
                     final_subtitles.append(sub)
                     subtitle_index += 1
-                log_debug(f"已处理字幕 {shot.srt_path.name}, 添加了 {len(subs)} 条字幕。")
+                log_debug(
+                    f"已处理字幕 {shot.srt_path.name}, 添加了 {len(subs)} 条字幕。"
+                )
             except Exception as e:
                 log_error(f"处理字幕文件 {shot.srt_path.name} 失败: {e}")
 
@@ -490,7 +728,7 @@ async def _merge_srt_files(sorted_shots: list[Shot], output_srt_path: Path):
 
     if final_subtitles:
         final_srt_content = srt.compose(final_subtitles)
-        output_srt_path.write_text(final_srt_content, encoding='utf-8')
+        output_srt_path.write_text(final_srt_content, encoding="utf-8")
         log_info(f"✅ 字幕文件合并成功，保存至: {output_srt_path}")
     else:
         log_info("没有找到可合并的字幕文件。")
@@ -509,8 +747,8 @@ async def merge_video_clips(book_id: str, shots: list[Shot]):
     sorted_shots = sorted(shots, key=lambda s: (s.chapter_index, s.shot_id))
 
     valid_clips = [
-        shot.video_clip_path 
-        for shot in sorted_shots 
+        shot.video_clip_path
+        for shot in sorted_shots
         if shot.video_clip_path and shot.video_clip_path.exists()
     ]
 
@@ -535,18 +773,20 @@ async def merge_video_clips(book_id: str, shots: list[Shot]):
     command = [
         "ffmpeg",
         "-y",  # 覆盖输出文件
-        "-f", "concat",
-        "-safe", "0",
-        "-i", str(concat_list_path),
-        "-c", "copy", # 直接复制流，速度最快
+        "-f",
+        "concat",
+        "-safe",
+        "0",
+        "-i",
+        str(concat_list_path),
+        "-c",
+        "copy",  # 直接复制流，速度最快
         str(final_video_path),
     ]
 
     log_info(f"执行ffmpeg命令: {' '.join(command)}")
     process = await asyncio.create_subprocess_exec(
-        *command,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE
+        *command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
     )
 
     stdout, stderr = await process.communicate()
@@ -564,15 +804,16 @@ async def merge_video_clips(book_id: str, shots: list[Shot]):
 
 <file path="app/cache.py">
 # app/cache.py
-import hashlib
 import json
 import pickle
-from functools import wraps
+import hashlib
 from pathlib import Path
-from typing import Callable, Any
+from typing import Callable
+from functools import wraps
 
 from .config import settings
 from .logger import log_debug
+
 
 def _generate_cache_key(func: Callable, *args, **kwargs) -> str:
     """根据函数和参数生成一个确定性的哈希键"""
@@ -585,7 +826,9 @@ def _generate_cache_key(func: Callable, *args, **kwargs) -> str:
             "args": args,
             "kwargs": kwargs,
         }
-        serialized_data = json.dumps(payload, sort_keys=True, default=str).encode('utf-8')
+        serialized_data = json.dumps(payload, sort_keys=True, default=str).encode(
+            "utf-8"
+        )
     except TypeError:
         # 对于更复杂或不可序列化为JSON的对象，使用pickle作为后备方案
         # 注意：pickle的输出可能因Python版本而异，但对于一个稳定环境是可靠的
@@ -595,7 +838,8 @@ def _generate_cache_key(func: Callable, *args, **kwargs) -> str:
     # 使用SHA256生成哈希值
     return hashlib.sha256(serialized_data).hexdigest()
 
-def cache(cache_path: Path, result_type: str = 'text'):
+
+def cache(cache_path: Path, result_type: str = "text"):
     """
     一个通用的缓存装饰器，可缓存函数结果到文件。
     支持文本和二进制两种模式。
@@ -603,41 +847,49 @@ def cache(cache_path: Path, result_type: str = 'text'):
     :param cache_path: 缓存文件的存储目录 (e.g., settings.paths.cache_llm)
     :param result_type: 'text' 或 'binary'
     """
+
     def decorator(func: Callable) -> Callable:
         @wraps(func)
-        def wrapper(*args, **kwargs):
+        async def wrapper(*args, **kwargs):
             cache_key = _generate_cache_key(func, *args, **kwargs)
             cache_file = cache_path / f"{func.__name__}_{cache_key}"
 
             # 检查缓存是否存在
             if cache_file.exists():
-                log_debug(f"✅ 缓存命中: {func.__name__} (key: {cache_key[:8]}...), 从 {cache_file} 读取")
-                if result_type == 'binary':
+                log_debug(
+                    f"✅ 缓存命中: {func.__name__} (key: {cache_key[:8]}...), 从 {cache_file} 读取"
+                )
+                if result_type == "binary":
                     return cache_file.read_bytes()
                 else:
-                    return cache_file.read_text(encoding='utf-8')
+                    return cache_file.read_text(encoding="utf-8")
 
             # 执行函数并获取结果
-            log_debug(f"❌ 缓存未命中: {func.__name__} (key: {cache_key[:8]}...), 执行函数")
-            result = func(*args, **kwargs)
+            log_debug(
+                f"❌ 缓存未命中: {func.__name__} (key: {cache_key[:8]}...), 执行函数"
+            )
+            result = await func(*args, **kwargs)
 
             # 保存结果到缓存
             if result is not None:
                 cache_path.mkdir(parents=True, exist_ok=True)
-                if result_type == 'binary':
+                if result_type == "binary":
                     cache_file.write_bytes(result)
                 else:
-                    cache_file.write_text(str(result), encoding='utf-8')
+                    cache_file.write_text(str(result), encoding="utf-8")
                 log_debug(f"📝 结果已缓存至: {cache_file}")
 
             return result
+
         return wrapper
+
     return decorator
 
+
 # 预先定义好的缓存装饰器实例
-llm_cache = cache(settings.paths.cache_llm, 'text')
-image_cache = cache(settings.paths.cache_image, 'binary')
-audio_cache = cache(settings.paths.cache_audio, 'binary')
+llm_cache = cache(settings.paths.cache_llm, "text")
+image_cache = cache(settings.paths.cache_image, "binary")
+audio_cache = cache(settings.paths.cache_audio, "binary")
 </file>
 
 <file path="app/config.py">
@@ -650,27 +902,39 @@ from dotenv import load_dotenv
 # 在模块加载时，第一时间加载环境变量
 load_dotenv()
 
+
 def _get_bool_env(var_name: str, default: bool = False) -> bool:
     """Helper to get boolean value from environment variables."""
     value = os.getenv(var_name, str(default)).lower()
     return value in ("true", "1", "t", "yes", "y")
 
+
+def _get_int_env(var_name: str, default: int) -> int:
+    """Helper to get integer value from environment variables."""
+    value = os.getenv(var_name, str(default))
+    return int(value.split("#")[0].strip())
+
+
 @dataclass(frozen=True)
 class LLMConfig:
     """配置用于 LLM 客户端"""
+
     api_key: str
     base_url: str
     model: str
-    timeout: int = int(os.getenv("LLM_TIMEOUT", 120))
-    retry_attempts: int = int(os.getenv("LLM_RETRY_ATTEMPTS", 3))
+    max_tokens: int
+    timeout: int = _get_int_env("LLM_TIMEOUT", 120)
+    retry_attempts: int = _get_int_env("LLM_RETRY_ATTEMPTS", 3)
+
 
 @dataclass(frozen=True)
 class PathConfig:
     """统一管理项目中的所有路径"""
+
     data_dir: Path = Path("data")
     cache_dir: Path = data_dir / "cache"
     book_dir: Path = data_dir / "book"
-    
+
     # 缓存子目录
     cache_llm: Path = cache_dir / "llm"
     cache_image: Path = cache_dir / "image"
@@ -686,43 +950,54 @@ class PathConfig:
         self.cache_llm.mkdir(parents=True, exist_ok=True)
         self.cache_image.mkdir(parents=True, exist_ok=True)
         self.cache_audio.mkdir(parents=True, exist_ok=True)
-        
+
+
 @dataclass(frozen=True)
 class Settings:
     """全局应用配置"""
+
     # 书籍配置
     book_source: str = os.getenv("BOOK_SOURCE", "test_novel.txt")
     custom_book_id: str | None = os.getenv("CUSTOM_BOOK_ID")
-    cookie: str = os.getenv("COOKIE", "") # 用于需要登录才能访问的网站
+    cookie: str = os.getenv("COOKIE", "")  # 用于需要登录才能访问的网站
 
     # LLM 配置
-    storyboard_llm: LLMConfig = field(default_factory=lambda: LLMConfig(
-        api_key=os.getenv("STORYBOARD_API_KEY", ""),
-        base_url=os.getenv("STORYBOARD_API_URL", ""),
-        model=os.getenv("STORYBOARD_MODEL", "gemini-1.5-flash-latest")
-    ))
-    prompt_llm: LLMConfig = field(default_factory=lambda: LLMConfig(
-        api_key=os.getenv("PROMPT_API_KEY", ""),
-        base_url=os.getenv("PROMPT_API_URL", ""),
-        model=os.getenv("PROMPT_MODEL", "deepseek-v2")
-    ))
-    
+    storyboard_llm: LLMConfig = field(
+        default_factory=lambda: LLMConfig(
+            api_key=os.getenv("STORYBOARD_API_KEY", ""),
+            base_url=os.getenv("STORYBOARD_API_URL", ""),
+            model=os.getenv("STORYBOARD_MODEL", "gemini-1.5-flash-latest"),
+            max_tokens=_get_int_env("STORYBOARD_MAX_TOKENS", 8000),
+        )
+    )
+    prompt_llm: LLMConfig = field(
+        default_factory=lambda: LLMConfig(
+            api_key=os.getenv("PROMPT_API_KEY", ""),
+            base_url=os.getenv("PROMPT_API_URL", ""),
+            model=os.getenv("PROMPT_MODEL", "deepseek-v2"),
+            max_tokens=_get_int_env("PROMPT_MAX_TOKENS", 8000),  # 也为 prompt_llm 预留
+        )
+    )
+
     # 图像生成配置
-    image_width: int = int(os.getenv("IMAGE_WIDTH", 1024))
-    image_height: int = int(os.getenv("IMAGE_HEIGHT", 1024))
-    image_style_prompt: str = os.getenv("IMAGE_STYLE_PROMPT", "cinematic, dramatic lighting, detailed, illustration, anime style, 8k")
+    image_width: int = _get_int_env("IMAGE_WIDTH", 1024)
+    image_height: int = _get_int_env("IMAGE_HEIGHT", 1024)
+    image_style_prompt: str = os.getenv(
+        "IMAGE_STYLE_PROMPT",
+        "cinematic, dramatic lighting, detailed, illustration, anime style, 8k",
+    )
 
     # 音频生成配置
     edge_tts_voice: str = os.getenv("EDGE_TTS_VOICE", "zh-CN-YunxiNeural")
-    audio_threads: int = int(os.getenv("AUDIO_THREADS", 5))
+    audio_threads: int = _get_int_env("AUDIO_THREADS", 5)
 
     # 视频生成配置
-    video_threads: int = int(os.getenv("VIDEO_THREADS", 4))
-    video_width: int = int(os.getenv("VIDEO_WIDTH", 750))
-    video_height: int = int(os.getenv("VIDEO_HEIGHT", 1280))
-    
+    video_threads: int = _get_int_env("VIDEO_THREADS", 4)
+    video_width: int = _get_int_env("VIDEO_WIDTH", 750)
+    video_height: int = _get_int_env("VIDEO_HEIGHT", 1280)
+
     # 性能与流程控制
-    max_llm_threads: int = int(os.getenv("LLM_THREADS", 3))
+    max_llm_threads: int = _get_int_env("LLM_THREADS", 3)
     verbose_logging: bool = _get_bool_env("VERBOSE_LOGGING", True)
 
     # 路径配置
@@ -736,6 +1011,7 @@ class Settings:
             return Path(self.book_source).stem
         return self.book_source
 
+
 # 创建一个全局单例配置对象
 settings = Settings()
 </file>
@@ -747,12 +1023,13 @@ import platform
 import functools
 from .logger import log_info, log_warning
 
+
 @functools.lru_cache(maxsize=1)
 def get_ffmpeg_gpu_params():
     """
     自动检测并返回适用于当前系统的 FFmpeg GPU 加速参数。
     使用 lru_cache 缓存结果，避免重复检测。
-    
+
     Returns:
         dict: 包含 pre_input 和 output_params 的字典。
     """
@@ -761,60 +1038,83 @@ def get_ffmpeg_gpu_params():
 
     # 检查 ffmpeg 是否存在
     try:
-        subprocess.run(["ffmpeg", "-version"], capture_output=True, check=True, text=True)
+        subprocess.run(
+            ["ffmpeg", "-version"], capture_output=True, check=True, text=True
+        )
     except (FileNotFoundError, subprocess.CalledProcessError):
         log_warning("系统中未找到 ffmpeg 或无法执行。将使用纯 CPU 编码。")
-        return {"pre_input": [], "output_params": {"codec": "libx264"}, "extra_params": []}
+        return {
+            "pre_input": [],
+            "output_params": {"codec": "libx264"},
+            "extra_params": [],
+        }
 
     # NVIDIA (Windows/Linux)
     if system in ["Windows", "Linux"]:
         try:
-            result = subprocess.run(["ffmpeg", "-hwaccels"], capture_output=True, text=True)
+            result = subprocess.run(
+                ["ffmpeg", "-hwaccels"], capture_output=True, text=True
+            )
             if "cuda" in result.stdout:
                 log_info("✅ 检测到 NVIDIA CUDA 支持。")
                 # 检查 h264_nvenc 编码器
-                result = subprocess.run(["ffmpeg", "-encoders"], capture_output=True, text=True)
-                if 'h264_nvenc' in result.stdout:
+                result = subprocess.run(
+                    ["ffmpeg", "-encoders"], capture_output=True, text=True
+                )
+                if "h264_nvenc" in result.stdout:
                     log_info("✅ 检测到 h264_nvenc 编码器。启用 NVIDIA GPU 加速。")
                     return {
                         "pre_input": ["-hwaccel", "cuda"],
                         "output_params": {"codec": "h264_nvenc", "preset": "fast"},
-                        "extra_params": [] # NVIDIA编码器不需要额外参数
+                        "extra_params": [],  # NVIDIA编码器不需要额外参数
                     }
         except (FileNotFoundError, subprocess.CalledProcessError):
-            pass # ffmpeg 未找到或执行失败，继续尝试其他选项
+            pass  # ffmpeg 未找到或执行失败，继续尝试其他选项
 
     # Apple Silicon / Intel (macOS)
     if system == "Darwin":
         try:
-            result = subprocess.run(["ffmpeg", "-hwaccels"], capture_output=True, text=True)
+            result = subprocess.run(
+                ["ffmpeg", "-hwaccels"], capture_output=True, text=True
+            )
             if "videotoolbox" in result.stdout:
                 log_info("✅ 检测到 Apple VideoToolbox 支持。")
                 # 检查 h264_videotoolbox 编码器
-                result = subprocess.run(["ffmpeg", "-encoders"], capture_output=True, text=True)
-                if 'h264_videotoolbox' in result.stdout:
-                    log_info("✅ 检测到 h264_videotoolbox 编码器。启用 macOS GPU 加速。")
+                result = subprocess.run(
+                    ["ffmpeg", "-encoders"], capture_output=True, text=True
+                )
+                if "h264_videotoolbox" in result.stdout:
+                    log_info(
+                        "✅ 检测到 h264_videotoolbox 编码器。启用 macOS GPU 加速。"
+                    )
                     return {
                         "pre_input": ["-hwaccel", "videotoolbox"],
                         "output_params": {"codec": "h264_videotoolbox"},
-                        "extra_params": ["-b:v", "8000k"] # 比特率参数通过ffmpeg_params传递
+                        "extra_params": [
+                            "-b:v",
+                            "8000k",
+                        ],  # 比特率参数通过ffmpeg_params传递
                     }
         except (FileNotFoundError, subprocess.CalledProcessError):
-             pass
+            pass
 
     # Intel Quick Sync Video (Windows/Linux)
     if system in ["Windows", "Linux"]:
         try:
-            result = subprocess.run(["ffmpeg", "-hwaccels"], capture_output=True, text=True)
+            result = subprocess.run(
+                ["ffmpeg", "-hwaccels"], capture_output=True, text=True
+            )
             if "qsv" in result.stdout:
                 log_info("✅ 检测到 Intel QSV 支持。")
-                result = subprocess.run(["ffmpeg", "-encoders"], capture_output=True, text=True)
-                if 'h264_qsv' in result.stdout:
+                result = subprocess.run(
+                    ["ffmpeg", "-encoders"], capture_output=True, text=True
+                )
+                if "h264_qsv" in result.stdout:
                     log_info("✅ 检测到 h264_qsv 编码器。启用 Intel QSV 加速。")
                     return {
                         "pre_input": ["-hwaccel", "qsv"],
                         "output_params": {"codec": "h264_qsv", "preset": "fast"},
-                        "extra_params": [] # Intel QSV不需要额外参数
+                        "extra_params": [],  # Intel QSV不需要额外参数
                     }
         except (FileNotFoundError, subprocess.CalledProcessError):
             pass
@@ -829,12 +1129,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
+
 @dataclass
 class Shot:
     """
     表示一个独立的分镜（或镜头）。
     这是我们流水线中处理的基本工作单元。
     """
+
     # 核心内容
     shot_id: int
     chapter_index: int
@@ -858,9 +1160,11 @@ class Shot:
         """返回唯一的镜头ID，格式为 '章节-镜头'"""
         return f"{self.chapter_index}-{self.shot_id}"
 
+
 @dataclass
 class Chapter:
     """表示一个完整的章节，包含多个分镜。"""
+
     index: int
     content: str
     shots: list[Shot] = field(default_factory=list)
@@ -873,14 +1177,15 @@ import concurrent.futures
 from typing import Optional
 
 from .config import settings
-from .logger import log_info, log_error, log_step_start, log_step_complete
-from .models import Shot
 from .stages import content, storyboard, assets, finalizer
+from .logger import log_info, log_error, log_step_start, log_step_complete
+
 
 class Pipeline:
     """
     异步流水线控制器，负责编排整个视频生成过程。
     """
+
     def __init__(self, book_id: str, source_file: Optional[str] = None):
         self.book_id = book_id
         self.source_file = source_file
@@ -892,7 +1197,7 @@ class Pipeline:
     async def run(self):
         """按顺序执行流水线的各个阶段"""
         start_time = asyncio.get_event_loop().time()
-        
+
         # --- 阶段 1: 内容获取 ---
         log_step_start("阶段 1: 内容获取")
         chapters = await content.get_chapters(self.book_id, self.source_file)
@@ -907,16 +1212,23 @@ class Pipeline:
         if not all_shots:
             log_error("分镜生成失败，流水线终止。")
             return
-        log_step_complete("阶段 2: 生成分镜与提示词", details=f"共生成 {len(all_shots)} 个分镜")
+        log_step_complete(
+            "阶段 2: 生成分镜与提示词", details=f"共生成 {len(all_shots)} 个分镜"
+        )
 
         # --- 阶段 3: 资产生成 (图片、音频、视频片段) ---
         log_step_start("阶段 3: 并行生成所有资产")
-        processed_shots = await assets.generate_all_assets(all_shots, self.book_path, self.process_executor)
+        processed_shots = await assets.generate_all_assets(
+            all_shots, self.book_path, self.process_executor
+        )
         successful_shots = [shot for shot in processed_shots if not shot.error]
         if not successful_shots:
             log_error("所有资产生成失败，流水线终止。")
             return
-        log_step_complete("阶段 3: 并行生成所有资产", details=f"成功处理 {len(successful_shots)}/{len(all_shots)} 个镜头")
+        log_step_complete(
+            "阶段 3: 并行生成所有资产",
+            details=f"成功处理 {len(successful_shots)}/{len(all_shots)} 个镜头",
+        )
 
         # --- 阶段 4: 最终合成 ---
         log_step_start("阶段 4: 合成最终视频")
@@ -928,995 +1240,6 @@ class Pipeline:
 
         # 优雅地关闭进程池
         self.process_executor.shutdown()
-</file>
-
-<file path=".gitignore">
-# Python-generated files
-__pycache__/
-*.py[oc]
-build/
-dist/
-wheels/
-*.egg-info
-
-# Virtual environments
-.venv
-data/book/
-
-.mp4
-.env
-</file>
-
-<file path=".python-version">
-3.12
-</file>
-
-<file path="LICENSE">
-GNU GENERAL PUBLIC LICENSE
-                       Version 3, 29 June 2007
-
- Copyright (C) 2007 Free Software Foundation, Inc. <https://fsf.org/>
- Everyone is permitted to copy and distribute verbatim copies
- of this license document, but changing it is not allowed.
-
-                            Preamble
-
-  The GNU General Public License is a free, copyleft license for
-software and other kinds of works.
-
-  The licenses for most software and other practical works are designed
-to take away your freedom to share and change the works.  By contrast,
-the GNU General Public License is intended to guarantee your freedom to
-share and change all versions of a program--to make sure it remains free
-software for all its users.  We, the Free Software Foundation, use the
-GNU General Public License for most of our software; it applies also to
-any other work released this way by its authors.  You can apply it to
-your programs, too.
-
-  When we speak of free software, we are referring to freedom, not
-price.  Our General Public Licenses are designed to make sure that you
-have the freedom to distribute copies of free software (and charge for
-them if you wish), that you receive source code or can get it if you
-want it, that you can change the software or use pieces of it in new
-free programs, and that you know you can do these things.
-
-  To protect your rights, we need to prevent others from denying you
-these rights or asking you to surrender the rights.  Therefore, you have
-certain responsibilities if you distribute copies of the software, or if
-you modify it: responsibilities to respect the freedom of others.
-
-  For example, if you distribute copies of such a program, whether
-gratis or for a fee, you must pass on to the recipients the same
-freedoms that you received.  You must make sure that they, too, receive
-or can get the source code.  And you must show them these terms so they
-know their rights.
-
-  Developers that use the GNU GPL protect your rights with two steps:
-(1) assert copyright on the software, and (2) offer you this License
-giving you legal permission to copy, distribute and/or modify it.
-
-  For the developers' and authors' protection, the GPL clearly explains
-that there is no warranty for this free software.  For both users' and
-authors' sake, the GPL requires that modified versions be marked as
-changed, so that their problems will not be attributed erroneously to
-authors of previous versions.
-
-  Some devices are designed to deny users access to install or run
-modified versions of the software inside them, although the manufacturer
-can do so.  This is fundamentally incompatible with the aim of
-protecting users' freedom to change the software.  The systematic
-pattern of such abuse occurs in the area of products for individuals to
-use, which is precisely where it is most unacceptable.  Therefore, we
-have designed this version of the GPL to prohibit the practice for those
-products.  If such problems arise substantially in other domains, we
-stand ready to extend this provision to those domains in future versions
-of the GPL, as needed to protect the freedom of users.
-
-  Finally, every program is threatened constantly by software patents.
-States should not allow patents to restrict development and use of
-software on general-purpose computers, but in those that do, we wish to
-avoid the special danger that patents applied to a free program could
-make it effectively proprietary.  To prevent this, the GPL assures that
-patents cannot be used to render the program non-free.
-
-  The precise terms and conditions for copying, distribution and
-modification follow.
-
-                       TERMS AND CONDITIONS
-
-  0. Definitions.
-
-  "This License" refers to version 3 of the GNU General Public License.
-
-  "Copyright" also means copyright-like laws that apply to other kinds of
-works, such as semiconductor masks.
-
-  "The Program" refers to any copyrightable work licensed under this
-License.  Each licensee is addressed as "you".  "Licensees" and
-"recipients" may be individuals or organizations.
-
-  To "modify" a work means to copy from or adapt all or part of the work
-in a fashion requiring copyright permission, other than the making of an
-exact copy.  The resulting work is called a "modified version" of the
-earlier work or a work "based on" the earlier work.
-
-  A "covered work" means either the unmodified Program or a work based
-on the Program.
-
-  To "propagate" a work means to do anything with it that, without
-permission, would make you directly or secondarily liable for
-infringement under applicable copyright law, except executing it on a
-computer or modifying a private copy.  Propagation includes copying,
-distribution (with or without modification), making available to the
-public, and in some countries other activities as well.
-
-  To "convey" a work means any kind of propagation that enables other
-parties to make or receive copies.  Mere interaction with a user through
-a computer network, with no transfer of a copy, is not conveying.
-
-  An interactive user interface displays "Appropriate Legal Notices"
-to the extent that it includes a convenient and prominently visible
-feature that (1) displays an appropriate copyright notice, and (2)
-tells the user that there is no warranty for the work (except to the
-extent that warranties are provided), that licensees may convey the
-work under this License, and how to view a copy of this License.  If
-the interface presents a list of user commands or options, such as a
-menu, a prominent item in the list meets this criterion.
-
-  1. Source Code.
-
-  The "source code" for a work means the preferred form of the work
-for making modifications to it.  "Object code" means any non-source
-form of a work.
-
-  A "Standard Interface" means an interface that either is an official
-standard defined by a recognized standards body, or, in the case of
-interfaces specified for a particular programming language, one that
-is widely used among developers working in that language.
-
-  The "System Libraries" of an executable work include anything, other
-than the work as a whole, that (a) is included in the normal form of
-packaging a Major Component, but which is not part of that Major
-Component, and (b) serves only to enable use of the work with that
-Major Component, or to implement a Standard Interface for which an
-implementation is available to the public in source code form.  A
-"Major Component", in this context, means a major essential component
-(kernel, window system, and so on) of the specific operating system
-(if any) on which the executable work runs, or a compiler used to
-produce the work, or an object code interpreter used to run it.
-
-  The "Corresponding Source" for a work in object code form means all
-the source code needed to generate, install, and (for an executable
-work) run the object code and to modify the work, including scripts to
-control those activities.  However, it does not include the work's
-System Libraries, or general-purpose tools or generally available free
-programs which are used unmodified in performing those activities but
-which are not part of the work.  For example, Corresponding Source
-includes interface definition files associated with source files for
-the work, and the source code for shared libraries and dynamically
-linked subprograms that the work is specifically designed to require,
-such as by intimate data communication or control flow between those
-subprograms and other parts of the work.
-
-  The Corresponding Source need not include anything that users
-can regenerate automatically from other parts of the Corresponding
-Source.
-
-  The Corresponding Source for a work in source code form is that
-same work.
-
-  2. Basic Permissions.
-
-  All rights granted under this License are granted for the term of
-copyright on the Program, and are irrevocable provided the stated
-conditions are met.  This License explicitly affirms your unlimited
-permission to run the unmodified Program.  The output from running a
-covered work is covered by this License only if the output, given its
-content, constitutes a covered work.  This License acknowledges your
-rights of fair use or other equivalent, as provided by copyright law.
-
-  You may make, run and propagate covered works that you do not
-convey, without conditions so long as your license otherwise remains
-in force.  You may convey covered works to others for the sole purpose
-of having them make modifications exclusively for you, or provide you
-with facilities for running those works, provided that you comply with
-the terms of this License in conveying all material for which you do
-not control copyright.  Those thus making or running the covered works
-for you must do so exclusively on your behalf, under your direction
-and control, on terms that prohibit them from making any copies of
-your copyrighted material outside their relationship with you.
-
-  Conveying under any other circumstances is permitted solely under
-the conditions stated below.  Sublicensing is not allowed; section 10
-makes it unnecessary.
-
-  3. Protecting Users' Legal Rights From Anti-Circumvention Law.
-
-  No covered work shall be deemed part of an effective technological
-measure under any applicable law fulfilling obligations under article
-11 of the WIPO copyright treaty adopted on 20 December 1996, or
-similar laws prohibiting or restricting circumvention of such
-measures.
-
-  When you convey a covered work, you waive any legal power to forbid
-circumvention of technological measures to the extent such circumvention
-is effected by exercising rights under this License with respect to
-the covered work, and you disclaim any intention to limit operation or
-modification of the work as a means of enforcing, against the work's
-users, your or third parties' legal rights to forbid circumvention of
-technological measures.
-
-  4. Conveying Verbatim Copies.
-
-  You may convey verbatim copies of the Program's source code as you
-receive it, in any medium, provided that you conspicuously and
-appropriately publish on each copy an appropriate copyright notice;
-keep intact all notices stating that this License and any
-non-permissive terms added in accord with section 7 apply to the code;
-keep intact all notices of the absence of any warranty; and give all
-recipients a copy of this License along with the Program.
-
-  You may charge any price or no price for each copy that you convey,
-and you may offer support or warranty protection for a fee.
-
-  5. Conveying Modified Source Versions.
-
-  You may convey a work based on the Program, or the modifications to
-produce it from the Program, in the form of source code under the
-terms of section 4, provided that you also meet all of these conditions:
-
-    a) The work must carry prominent notices stating that you modified
-    it, and giving a relevant date.
-
-    b) The work must carry prominent notices stating that it is
-    released under this License and any conditions added under section
-    7.  This requirement modifies the requirement in section 4 to
-    "keep intact all notices".
-
-    c) You must license the entire work, as a whole, under this
-    License to anyone who comes into possession of a copy.  This
-    License will therefore apply, along with any applicable section 7
-    additional terms, to the whole of the work, and all its parts,
-    regardless of how they are packaged.  This License gives no
-    permission to license the work in any other way, but it does not
-    invalidate such permission if you have separately received it.
-
-    d) If the work has interactive user interfaces, each must display
-    Appropriate Legal Notices; however, if the Program has interactive
-    interfaces that do not display Appropriate Legal Notices, your
-    work need not make them do so.
-
-  A compilation of a covered work with other separate and independent
-works, which are not by their nature extensions of the covered work,
-and which are not combined with it such as to form a larger program,
-in or on a volume of a storage or distribution medium, is called an
-"aggregate" if the compilation and its resulting copyright are not
-used to limit the access or legal rights of the compilation's users
-beyond what the individual works permit.  Inclusion of a covered work
-in an aggregate does not cause this License to apply to the other
-parts of the aggregate.
-
-  6. Conveying Non-Source Forms.
-
-  You may convey a covered work in object code form under the terms
-of sections 4 and 5, provided that you also convey the
-machine-readable Corresponding Source under the terms of this License,
-in one of these ways:
-
-    a) Convey the object code in, or embodied in, a physical product
-    (including a physical distribution medium), accompanied by the
-    Corresponding Source fixed on a durable physical medium
-    customarily used for software interchange.
-
-    b) Convey the object code in, or embodied in, a physical product
-    (including a physical distribution medium), accompanied by a
-    written offer, valid for at least three years and valid for as
-    long as you offer spare parts or customer support for that product
-    model, to give anyone who possesses the object code either (1) a
-    copy of the Corresponding Source for all the software in the
-    product that is covered by this License, on a durable physical
-    medium customarily used for software interchange, for a price no
-    more than your reasonable cost of physically performing this
-    conveying of source, or (2) access to copy the
-    Corresponding Source from a network server at no charge.
-
-    c) Convey individual copies of the object code with a copy of the
-    written offer to provide the Corresponding Source.  This
-    alternative is allowed only occasionally and noncommercially, and
-    only if you received the object code with such an offer, in accord
-    with subsection 6b.
-
-    d) Convey the object code by offering access from a designated
-    place (gratis or for a charge), and offer equivalent access to the
-    Corresponding Source in the same way through the same place at no
-    further charge.  You need not require recipients to copy the
-    Corresponding Source along with the object code.  If the place to
-    copy the object code is a network server, the Corresponding Source
-    may be on a different server (operated by you or a third party)
-    that supports equivalent copying facilities, provided you maintain
-    clear directions next to the object code saying where to find the
-    Corresponding Source.  Regardless of what server hosts the
-    Corresponding Source, you remain obligated to ensure that it is
-    available for as long as needed to satisfy these requirements.
-
-    e) Convey the object code using peer-to-peer transmission, provided
-    you inform other peers where the object code and Corresponding
-    Source of the work are being offered to the general public at no
-    charge under subsection 6d.
-
-  A separable portion of the object code, whose source code is excluded
-from the Corresponding Source as a System Library, need not be
-included in conveying the object code work.
-
-  A "User Product" is either (1) a "consumer product", which means any
-tangible personal property which is normally used for personal, family,
-or household purposes, or (2) anything designed or sold for incorporation
-into a dwelling.  In determining whether a product is a consumer product,
-doubtful cases shall be resolved in favor of coverage.  For a particular
-product received by a particular user, "normally used" refers to a
-typical or common use of that class of product, regardless of the status
-of the particular user or of the way in which the particular user
-actually uses, or expects or is expected to use, the product.  A product
-is a consumer product regardless of whether the product has substantial
-commercial, industrial or non-consumer uses, unless such uses represent
-the only significant mode of use of the product.
-
-  "Installation Information" for a User Product means any methods,
-procedures, authorization keys, or other information required to install
-and execute modified versions of a covered work in that User Product from
-a modified version of its Corresponding Source.  The information must
-suffice to ensure that the continued functioning of the modified object
-code is in no case prevented or interfered with solely because
-modification has been made.
-
-  If you convey an object code work under this section in, or with, or
-specifically for use in, a User Product, and the conveying occurs as
-part of a transaction in which the right of possession and use of the
-User Product is transferred to the recipient in perpetuity or for a
-fixed term (regardless of how the transaction is characterized), the
-Corresponding Source conveyed under this section must be accompanied
-by the Installation Information.  But this requirement does not apply
-if neither you nor any third party retains the ability to install
-modified object code on the User Product (for example, the work has
-been installed in ROM).
-
-  The requirement to provide Installation Information does not include a
-requirement to continue to provide support service, warranty, or updates
-for a work that has been modified or installed by the recipient, or for
-the User Product in which it has been modified or installed.  Access to a
-network may be denied when the modification itself materially and
-adversely affects the operation of the network or violates the rules and
-protocols for communication across the network.
-
-  Corresponding Source conveyed, and Installation Information provided,
-in accord with this section must be in a format that is publicly
-documented (and with an implementation available to the public in
-source code form), and must require no special password or key for
-unpacking, reading or copying.
-
-  7. Additional Terms.
-
-  "Additional permissions" are terms that supplement the terms of this
-License by making exceptions from one or more of its conditions.
-Additional permissions that are applicable to the entire Program shall
-be treated as though they were included in this License, to the extent
-that they are valid under applicable law.  If additional permissions
-apply only to part of the Program, that part may be used separately
-under those permissions, but the entire Program remains governed by
-this License without regard to the additional permissions.
-
-  When you convey a copy of a covered work, you may at your option
-remove any additional permissions from that copy, or from any part of
-it.  (Additional permissions may be written to require their own
-removal in certain cases when you modify the work.)  You may place
-additional permissions on material, added by you to a covered work,
-for which you have or can give appropriate copyright permission.
-
-  Notwithstanding any other provision of this License, for material you
-add to a covered work, you may (if authorized by the copyright holders of
-that material) supplement the terms of this License with terms:
-
-    a) Disclaiming warranty or limiting liability differently from the
-    terms of sections 15 and 16 of this License; or
-
-    b) Requiring preservation of specified reasonable legal notices or
-    author attributions in that material or in the Appropriate Legal
-    Notices displayed by works containing it; or
-
-    c) Prohibiting misrepresentation of the origin of that material, or
-    requiring that modified versions of such material be marked in
-    reasonable ways as different from the original version; or
-
-    d) Limiting the use for publicity purposes of names of licensors or
-    authors of the material; or
-
-    e) Declining to grant rights under trademark law for use of some
-    trade names, trademarks, or service marks; or
-
-    f) Requiring indemnification of licensors and authors of that
-    material by anyone who conveys the material (or modified versions of
-    it) with contractual assumptions of liability to the recipient, for
-    any liability that these contractual assumptions directly impose on
-    those licensors and authors.
-
-  All other non-permissive additional terms are considered "further
-restrictions" within the meaning of section 10.  If the Program as you
-received it, or any part of it, contains a notice stating that it is
-governed by this License along with a term that is a further
-restriction, you may remove that term.  If a license document contains
-a further restriction but permits relicensing or conveying under this
-License, you may add to a covered work material governed by the terms
-of that license document, provided that the further restriction does
-not survive such relicensing or conveying.
-
-  If you add terms to a covered work in accord with this section, you
-must place, in the relevant source files, a statement of the
-additional terms that apply to those files, or a notice indicating
-where to find the applicable terms.
-
-  Additional terms, permissive or non-permissive, may be stated in the
-form of a separately written license, or stated as exceptions;
-the above requirements apply either way.
-
-  8. Termination.
-
-  You may not propagate or modify a covered work except as expressly
-provided under this License.  Any attempt otherwise to propagate or
-modify it is void, and will automatically terminate your rights under
-this License (including any patent licenses granted under the third
-paragraph of section 11).
-
-  However, if you cease all violation of this License, then your
-license from a particular copyright holder is reinstated (a)
-provisionally, unless and until the copyright holder explicitly and
-finally terminates your license, and (b) permanently, if the copyright
-holder fails to notify you of the violation by some reasonable means
-prior to 60 days after the cessation.
-
-  Moreover, your license from a particular copyright holder is
-reinstated permanently if the copyright holder notifies you of the
-violation by some reasonable means, this is the first time you have
-received notice of violation of this License (for any work) from that
-copyright holder, and you cure the violation prior to 30 days after
-your receipt of the notice.
-
-  Termination of your rights under this section does not terminate the
-licenses of parties who have received copies or rights from you under
-this License.  If your rights have been terminated and not permanently
-reinstated, you do not qualify to receive new licenses for the same
-material under section 10.
-
-  9. Acceptance Not Required for Having Copies.
-
-  You are not required to accept this License in order to receive or
-run a copy of the Program.  Ancillary propagation of a covered work
-occurring solely as a consequence of using peer-to-peer transmission
-to receive a copy likewise does not require acceptance.  However,
-nothing other than this License grants you permission to propagate or
-modify any covered work.  These actions infringe copyright if you do
-not accept this License.  Therefore, by modifying or propagating a
-covered work, you indicate your acceptance of this License to do so.
-
-  10. Automatic Licensing of Downstream Recipients.
-
-  Each time you convey a covered work, the recipient automatically
-receives a license from the original licensors, to run, modify and
-propagate that work, subject to this License.  You are not responsible
-for enforcing compliance by third parties with this License.
-
-  An "entity transaction" is a transaction transferring control of an
-organization, or substantially all assets of one, or subdividing an
-organization, or merging organizations.  If propagation of a covered
-work results from an entity transaction, each party to that
-transaction who receives a copy of the work also receives whatever
-licenses to the work the party's predecessor in interest had or could
-give under the previous paragraph, plus a right to possession of the
-Corresponding Source of the work from the predecessor in interest, if
-the predecessor has it or can get it with reasonable efforts.
-
-  You may not impose any further restrictions on the exercise of the
-rights granted or affirmed under this License.  For example, you may
-not impose a license fee, royalty, or other charge for exercise of
-rights granted under this License, and you may not initiate litigation
-(including a cross-claim or counterclaim in a lawsuit) alleging that
-any patent claim is infringed by making, using, selling, offering for
-sale, or importing the Program or any portion of it.
-
-  11. Patents.
-
-  A "contributor" is a copyright holder who authorizes use under this
-License of the Program or a work on which the Program is based.  The
-work thus licensed is called the contributor's "contributor version".
-
-  A contributor's "essential patent claims" are all patent claims
-owned or controlled by the contributor, whether already acquired or
-hereafter acquired, that would be infringed by some manner, permitted
-by this License, of making, using, or selling its contributor version,
-but do not include claims that would be infringed only as a
-consequence of further modification of the contributor version.  For
-purposes of this definition, "control" includes the right to grant
-patent sublicenses in a manner consistent with the requirements of
-this License.
-
-  Each contributor grants you a non-exclusive, worldwide, royalty-free
-patent license under the contributor's essential patent claims, to
-make, use, sell, offer for sale, import and otherwise run, modify and
-propagate the contents of its contributor version.
-
-  In the following three paragraphs, a "patent license" is any express
-agreement or commitment, however denominated, not to enforce a patent
-(such as an express permission to practice a patent or covenant not to
-sue for patent infringement).  To "grant" such a patent license to a
-party means to make such an agreement or commitment not to enforce a
-patent against the party.
-
-  If you convey a covered work, knowingly relying on a patent license,
-and the Corresponding Source of the work is not available for anyone
-to copy, free of charge and under the terms of this License, through a
-publicly available network server or other readily accessible means,
-then you must either (1) cause the Corresponding Source to be so
-available, or (2) arrange to deprive yourself of the benefit of the
-patent license for this particular work, or (3) arrange, in a manner
-consistent with the requirements of this License, to extend the patent
-license to downstream recipients.  "Knowingly relying" means you have
-actual knowledge that, but for the patent license, your conveying the
-covered work in a country, or your recipient's use of the covered work
-in a country, would infringe one or more identifiable patents in that
-country that you have reason to believe are valid.
-
-  If, pursuant to or in connection with a single transaction or
-arrangement, you convey, or propagate by procuring conveyance of, a
-covered work, and grant a patent license to some of the parties
-receiving the covered work authorizing them to use, propagate, modify
-or convey a specific copy of the covered work, then the patent license
-you grant is automatically extended to all recipients of the covered
-work and works based on it.
-
-  A patent license is "discriminatory" if it does not include within
-the scope of its coverage, prohibits the exercise of, or is
-conditioned on the non-exercise of one or more of the rights that are
-specifically granted under this License.  You may not convey a covered
-work if you are a party to an arrangement with a third party that is
-in the business of distributing software, under which you make payment
-to the third party based on the extent of your activity of conveying
-the work, and under which the third party grants, to any of the
-parties who would receive the covered work from you, a discriminatory
-patent license (a) in connection with copies of the covered work
-conveyed by you (or copies made from those copies), or (b) primarily
-for and in connection with specific products or compilations that
-contain the covered work, unless you entered into that arrangement,
-or that patent license was granted, prior to 28 March 2007.
-
-  Nothing in this License shall be construed as excluding or limiting
-any implied license or other defenses to infringement that may
-otherwise be available to you under applicable patent law.
-
-  12. No Surrender of Others' Freedom.
-
-  If conditions are imposed on you (whether by court order, agreement or
-otherwise) that contradict the conditions of this License, they do not
-excuse you from the conditions of this License.  If you cannot convey a
-covered work so as to satisfy simultaneously your obligations under this
-License and any other pertinent obligations, then as a consequence you may
-not convey it at all.  For example, if you agree to terms that obligate you
-to collect a royalty for further conveying from those to whom you convey
-the Program, the only way you could satisfy both those terms and this
-License would be to refrain entirely from conveying the Program.
-
-  13. Use with the GNU Affero General Public License.
-
-  Notwithstanding any other provision of this License, you have
-permission to link or combine any covered work with a work licensed
-under version 3 of the GNU Affero General Public License into a single
-combined work, and to convey the resulting work.  The terms of this
-License will continue to apply to the part which is the covered work,
-but the special requirements of the GNU Affero General Public License,
-section 13, concerning interaction through a network will apply to the
-combination as such.
-
-  14. Revised Versions of this License.
-
-  The Free Software Foundation may publish revised and/or new versions of
-the GNU General Public License from time to time.  Such new versions will
-be similar in spirit to the present version, but may differ in detail to
-address new problems or concerns.
-
-  Each version is given a distinguishing version number.  If the
-Program specifies that a certain numbered version of the GNU General
-Public License "or any later version" applies to it, you have the
-option of following the terms and conditions either of that numbered
-version or of any later version published by the Free Software
-Foundation.  If the Program does not specify a version number of the
-GNU General Public License, you may choose any version ever published
-by the Free Software Foundation.
-
-  If the Program specifies that a proxy can decide which future
-versions of the GNU General Public License can be used, that proxy's
-public statement of acceptance of a version permanently authorizes you
-to choose that version for the Program.
-
-  Later license versions may give you additional or different
-permissions.  However, no additional obligations are imposed on any
-author or copyright holder as a result of your choosing to follow a
-later version.
-
-  15. Disclaimer of Warranty.
-
-  THERE IS NO WARRANTY FOR THE PROGRAM, TO THE EXTENT PERMITTED BY
-APPLICABLE LAW.  EXCEPT WHEN OTHERWISE STATED IN WRITING THE COPYRIGHT
-HOLDERS AND/OR OTHER PARTIES PROVIDE THE PROGRAM "AS IS" WITHOUT WARRANTY
-OF ANY KIND, EITHER EXPRESSED OR IMPLIED, INCLUDING, BUT NOT LIMITED TO,
-THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
-PURPOSE.  THE ENTIRE RISK AS TO THE QUALITY AND PERFORMANCE OF THE PROGRAM
-IS WITH YOU.  SHOULD THE PROGRAM PROVE DEFECTIVE, YOU ASSUME THE COST OF
-ALL NECESSARY SERVICING, REPAIR OR CORRECTION.
-
-  16. Limitation of Liability.
-
-  IN NO EVENT UNLESS REQUIRED BY APPLICABLE LAW OR AGREED TO IN WRITING
-WILL ANY COPYRIGHT HOLDER, OR ANY OTHER PARTY WHO MODIFIES AND/OR CONVEYS
-THE PROGRAM AS PERMITTED ABOVE, BE LIABLE TO YOU FOR DAMAGES, INCLUDING ANY
-GENERAL, SPECIAL, INCIDENTAL OR CONSEQUENTIAL DAMAGES ARISING OUT OF THE
-USE OR INABILITY TO USE THE PROGRAM (INCLUDING BUT NOT LIMITED TO LOSS OF
-DATA OR DATA BEING RENDERED INACCURATE OR LOSSES SUSTAINED BY YOU OR THIRD
-PARTIES OR A FAILURE OF THE PROGRAM TO OPERATE WITH ANY OTHER PROGRAMS),
-EVEN IF SUCH HOLDER OR OTHER PARTY HAS BEEN ADVISED OF THE POSSIBILITY OF
-SUCH DAMAGES.
-
-  17. Interpretation of Sections 15 and 16.
-
-  If the disclaimer of warranty and limitation of liability provided
-above cannot be given local legal effect according to their terms,
-reviewing courts shall apply local law that most closely approximates
-an absolute waiver of all civil liability in connection with the
-Program, unless a warranty or assumption of liability accompanies a
-copy of the Program in return for a fee.
-
-                     END OF TERMS AND CONDITIONS
-
-            How to Apply These Terms to Your New Programs
-
-  If you develop a new program, and you want it to be of the greatest
-possible use to the public, the best way to achieve this is to make it
-free software which everyone can redistribute and change under these terms.
-
-  To do so, attach the following notices to the program.  It is safest
-to attach them to the start of each source file to most effectively
-state the exclusion of warranty; and each file should have at least
-the "copyright" line and a pointer to where the full notice is found.
-
-    <one line to give the program's name and a brief idea of what it does.>
-    Copyright (C) <year>  <name of author>
-
-    This program is free software: you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation, either version 3 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program.  If not, see <https://www.gnu.org/licenses/>.
-
-Also add information on how to contact you by electronic and paper mail.
-
-  If the program does terminal interaction, make it output a short
-notice like this when it starts in an interactive mode:
-
-    <program>  Copyright (C) <year>  <name of author>
-    This program comes with ABSOLUTELY NO WARRANTY; for details type `show w'.
-    This is free software, and you are welcome to redistribute it
-    under certain conditions; type `show c' for details.
-
-The hypothetical commands `show w' and `show c' should show the appropriate
-parts of the General Public License.  Of course, your program's commands
-might be different; for a GUI interface, you would use an "about box".
-
-  You should also get your employer (if you work as a programmer) or school,
-if any, to sign a "copyright disclaimer" for the program, if necessary.
-For more information on this, and how to apply and follow the GNU GPL, see
-<https://www.gnu.org/licenses/>.
-
-  The GNU General Public License does not permit incorporating your program
-into proprietary programs.  If your program is a subroutine library, you
-may consider it more useful to permit linking proprietary applications with
-the library.  If this is what you want to do, use the GNU Lesser General
-Public License instead of this License.  But first, please read
-<https://www.gnu.org/licenses/why-not-lgpl.html>.
-</file>
-
-<file path="prompt.txt">
-你是一个资深的剧本编辑
-请根据我输入的内容生成分镜，分镜要包含所有小说内容，并且严格按照我输入的格式给我，其中 text为分镜文字内容，screenKeywords_cn 为分镜内容的镜头语言中文描述 screenKeywords_en为 镜头语言的英文描述，一个好的镜头语言可能包含这几类
-角色，动作，场景，情绪，风格，镜头角度，灯光与环境
-角色   年轻男子、老年女性、英雄、反派   描述角色的年龄、外观或角色类型。
-动作   跑步、微笑、哭泣、惊讶地看   明确角色的动作或表情。
-场景   森林、城市街道、海滩、厨房   指定故事发生的地点或背景。
-情绪   快乐、悲伤、神秘、浪漫   设定场景的氛围或情绪基调。
-风格   素描、水彩、卡通、写实、动漫   选择图像的艺术风格。
-镜头角度   特写、中景、广角、俯视   指定摄像机的视角或构图。
-灯光与环境   阳光、雨天、黄昏、夜景、背光  描述光线条件或环境氛围。
-不要对分镜文案进行提炼，一些角色人名，可以根据名字推测是男女还是青年少年，提示词中不要用人名
-错误例子 
-角色：年轻男子，动作：喝酒、沉思，场景：星空下，情绪：孤独、怀念，镜头角度：中景，灯光与环境：星光、夜晚
-正确例子 
-年轻男子，喝酒、沉思，星空下，孤独、怀念，中景，星光、夜晚
-Recipe =[
-    {
-        "id": "1",
-        "text": "xxxxxx",
-        "lensLanguage_cn": "",
-        "lensLanguage_en": ""
-    },
-    {
-        "id":"2",
-        "text":"xxxxxxxx",
-        "lensLanguage_cn":"",
-        "lensLanguage_en":""
-    }
-]
-Return: list[Recipe]
-</file>
-
-<file path="run.py">
-# run.py
-import asyncio
-import argparse
-from pathlib import Path
-
-from app.config import settings
-from app.logger import log_info, log_error
-from app.llm_client import test_llm_connections
-from app.pipeline import Pipeline
-
-async def main():
-    """主异步函数，协调整个工作流"""
-    parser = argparse.ArgumentParser(description="TaleStreamAI - 自动化小说转视频工作流")
-    parser.add_argument(
-        "source",
-        nargs="?",
-        default=settings.book_source,
-        help=f"书籍来源：可以是起点ID或本地.txt文件路径 (默认为: {settings.book_source})",
-    )
-    parser.add_argument(
-        "--book_id",
-        default=settings.custom_book_id,
-        help="为本地文件指定一个自定义的书籍ID (默认为文件名)",
-    )
-    parser.add_argument(
-        "--test-connections",
-        action="store_true",
-        help="仅运行API连接测试后退出",
-    )
-    
-    args = parser.parse_args()
-
-    if args.test_connections:
-        await test_llm_connections()
-        return
-
-    # 更新配置以反映命令行参数
-    # (dataclasses 是不可变的, 所以我们创建一个新的)
-    # 技巧：使用 object.__setattr__ 来绕过 frozen=True 的限制进行修改
-    # 但更清晰的方式是在启动时就决定好配置
-    # 这里为了简单，我们假设 settings 已通过 .env 文件配置好，命令行仅用于临时覆盖
-    # 实际生产中可能会用更复杂的配置加载逻辑
-    
-    # 使用命令行参数来确定 book_id
-    final_book_id = args.book_id
-    if not final_book_id:
-        if args.source.endswith(".txt"):
-            final_book_id = Path(args.source).stem
-        else:
-            final_book_id = args.source
-    
-    log_info(f"🚀 工作流启动，书籍ID: {final_book_id}")
-
-    # 初始化并运行流水线
-    pipeline = Pipeline(book_id=final_book_id, source_file=args.source if args.source.endswith(".txt") else None)
-    
-    try:
-        await pipeline.run()
-        log_info("🎉 工作流全部阶段成功完成！")
-    except Exception as e:
-        log_error(f"工作流执行过程中发生未捕获的严重错误: {e}", exc_info=True)
-
-
-if __name__ == "__main__":
-    asyncio.run(main())
-</file>
-
-<file path="app/stages/storyboard.py">
-# app/stages/storyboard.py
-import asyncio
-import json
-import re
-from typing import Coroutine, List
-
-import tiktoken
-from ..config import settings
-from ..llm_client import storyboard_client, prompt_client
-from ..logger import log_info, log_error, log_warning, log_debug
-from ..models import Chapter, Shot
-
-# --- Prompts ---
-STORYBOARD_SYSTEM_PROMPT = """
-你是一个资深的剧本编辑。你的任务是根据我输入的小说内容，生成详细的分镜脚本。
-请遵循以下规则：
-1.  **高密度分镜**: 为每2到4句话（特别是对话或关键动作描述）创建一个独立的分镜。确保充分捕捉场景的动态变化和人物的情感交流。不要遗漏任何情节。
-2.  **完整内容**: `text` 字段必须包含原始的小说文本，不要进行任何形式的概括或提炼。
-3.  **镜头语言**: `lensLanguage_cn` 和 `lensLanguage_en` 需要详细描述镜头，包含以下元素：
-    -   **角色**: 年龄、性别、外观、角色类型（如：年轻男子, 憔悴的拳手）。不要使用人名。
-    -   **动作**: 角色的具体动作或表情（如：揪住衣领, 疲惫地喘气, 愤怒地呐喊）。
-    -   **场景**: 故事发生的地点或背景（如：昏暗的地下拳台角落, 明亮的医院病房）。
-    -   **情绪**: 场景的氛围或角色的情感基调（如：紧张, 绝望, 痛苦, 狂喜）。
-    -   **风格**: 图像的艺术风格，固定为 **动漫风格, 细节丰富, 插画感**。
-    -   **镜头角度**: 摄像机的视角或构图（如：特写, 中景, 过肩镜头, 俯视）。
-    -   **灯光与环境**: 光线条件或环境氛围（如：刺眼的顶光, 窗外的月光, 闪烁的灯光）。
-4.  **镜头语言格式**: 必须是逗号分隔的关键词组合，例如：`年轻男子, 揪着李哥的领子, 拳台角落, 绝望, 动漫风格, 特写, 顶光`。
-
-请严格按照以下JSON格式返回，不要添加任何其他文字或解释，只返回有效的JSON数组：
-[
-    {
-        "id": "1",
-        "text": "鼻骨断了？我一下揪住了蚊子的衣服，说：「我还要打！你想办法！」",
-        "lensLanguage_cn": "年轻拳手, 揪住衣服, 拳台, 愤怒、急切, 动漫风格, 插画感, 中景, 强光",
-        "lensLanguage_en": "young boxer, grabbing clothes, boxing ring, angry, urgent, anime style, detailed, illustration, medium shot, strong light"
-    }
-]
-"""
-
-PROMPT_REFINE_SYSTEM_PROMPT = """
-你是一位专业的AI绘画提示词工程师。你的任务是基于给定的场景描述，生成一段高质量、细节丰富的英文提示词，用于动漫风格的图像生成。
-请遵循以下规则：
-1.  **核心要素**: 提示词必须以 `masterpiece, best quality, highres` 开头。
-2.  **风格统一**: 必须包含 `anime style, detailed illustration, vibrant colors` 来确保画风一致。
-3.  **细节丰富**: 将中文描述（角色、动作、场景、情绪、灯光）转化为具体、生动的英文关键词。使用括号 `()` 来强调重要元素，例如 `(red eyes:1.2)`。
-4.  **格式**: 所有关键词用逗号 `,` 分隔。
-5.  **简洁**: 不要添加任何解释或无关的文字，直接输出提示词。
-
-例如，如果输入是 "年轻男子, 愤怒地呐喊, 雨中的街道, 绝望, 霓虹灯光, 特写"，一个好的输出是：
-masterpiece, best quality, highres, anime style, detailed illustration, vibrant colors, 1boy, young man, (screaming in anger:1.3), close-up shot, rain, wet clothes, desperate expression, neon lights reflection, dramatic lighting
-"""
-
-def _split_content_by_tokens(content: str, model_name: str, max_tokens: int) -> list[str]:
-    """按token数量将文本分割成块。"""
-    log_debug(f"Splitting content by tokens, max_tokens={max_tokens}")
-    try:
-        encoding = tiktoken.encoding_for_model(model_name)
-    except KeyError:
-        log_warning(f"Model '{model_name}' not found for tiktoken, using 'cl100k_base'.")
-        encoding = tiktoken.get_encoding("cl100k_base")
-    
-    paragraphs = content.split("\\n")
-    chunks, current_chunk_paragraphs, current_chunk_tokens = [], [], 0
-
-    for p in paragraphs:
-        if not p.strip(): continue
-        p_tokens = len(encoding.encode(p))
-
-        if p_tokens > max_tokens:
-            log_warning(f"Paragraph with {p_tokens} tokens exceeds max_tokens {max_tokens}, force splitting.")
-            encoded_p = encoding.encode(p)
-            for i in range(0, len(encoded_p), max_tokens):
-                chunks.append(encoding.decode(encoded_p[i:i + max_tokens]))
-            continue
-
-        if current_chunk_tokens + p_tokens > max_tokens:
-            chunks.append("\\n".join(current_chunk_paragraphs))
-            current_chunk_paragraphs = [p]
-            current_chunk_tokens = p_tokens
-        else:
-            current_chunk_paragraphs.append(p)
-            current_chunk_tokens += p_tokens
-    
-    if current_chunk_paragraphs:
-        chunks.append("\\n".join(current_chunk_paragraphs))
-    
-    log_info(f"Content split into {len(chunks)} chunks.")
-    return chunks
-
-async def _refine_shot_prompt(shot: Shot) -> Shot:
-    """为单个Shot对象优化生成图像的提示词"""
-    if not shot.storyboard_prompt_en:
-        shot.error = "Missing storyboard_prompt_en for refinement."
-        log_warning(f"Skipping prompt refinement for shot {shot.get_full_id()}: No English storyboard prompt.")
-        return shot
-
-    messages = [{"role": "user", "content": shot.storyboard_prompt_en}]
-    refined_prompt = await prompt_client.chat_completion(messages, system=PROMPT_REFINE_SYSTEM_PROMPT)
-
-    if "ERROR" in refined_prompt:
-        shot.error = f"Prompt refinement failed: {refined_prompt}"
-        log_error(f"Failed to refine prompt for shot {shot.get_full_id()}: {refined_prompt}")
-        # Fallback: use the original EN prompt and add the global style
-        shot.image_prompt = f"{shot.storyboard_prompt_en}, {settings.image_style_prompt}"
-    else:
-        shot.image_prompt = f"{refined_prompt}, {settings.image_style_prompt}"
-    
-    return shot
-
-async def _process_chapter_content(chapter: Chapter) -> list[Shot]:
-    """处理单个章节的完整内容，生成带有优化提示词的Shots列表"""
-    model_name = settings.storyboard_llm.model
-    # 根据模型上下文调整块大小，留出余量给prompt和输出
-    max_tokens = 30000 if "flash" in model_name else 8000
-    
-    content_chunks = _split_content_by_tokens(chapter.content, model_name, max_tokens)
-    
-    all_shots: list[Shot] = []
-    shot_id_counter = 1
-
-    for i, chunk in enumerate(content_chunks):
-        log_info(f"Processing chunk {i+1}/{len(content_chunks)} for chapter {chapter.index}...")
-        messages = [{"role": "user", "content": chunk}]
-        response_json_str = await storyboard_client.chat_completion(messages, system=STORYBOARD_SYSTEM_PROMPT)
-
-        if "ERROR" in response_json_str:
-            log_error(f"Storyboard generation failed for chunk {i+1} of chapter {chapter.index}: {response_json_str}")
-            continue
-        
-        try:
-            # Clean up the JSON string before parsing
-            response_json_str = re.sub(r'```json\s*|\s*```', '', response_json_str).strip()
-            storyboard_data = json.loads(response_json_str)
-            if not isinstance(storyboard_data, list):
-                # Try to find a list within a dictionary if the LLM wrapped it
-                if isinstance(storyboard_data, dict):
-                    found_list = False
-                    for key, value in storyboard_data.items():
-                        if isinstance(value, list):
-                            storyboard_data = value
-                            found_list = True
-                            log_warning(f"LLM returned a dictionary, but a list was found and extracted from key '{key}'.")
-                            break
-                    if not found_list:
-                        raise json.JSONDecodeError("Response is not a list and no list found in dictionary values", response_json_str, 0)
-                else:
-                    raise json.JSONDecodeError("Response is not a list", response_json_str, 0)
-
-            proto_shots = []
-            for item in storyboard_data:
-                shot = Shot(
-                    shot_id=shot_id_counter,
-                    chapter_index=chapter.index,
-                    original_text=item.get("text", ""),
-                    storyboard_prompt_cn=item.get("lensLanguage_cn", ""),
-                    storyboard_prompt_en=item.get("lensLanguage_en", "")
-                )
-                proto_shots.append(shot)
-                shot_id_counter += 1
-            
-            # 并发优化所有这些新生成shot的提示词
-            refinement_tasks = [_refine_shot_prompt(s) for s in proto_shots]
-            refined_shots = await asyncio.gather(*refinement_tasks)
-            all_shots.extend(refined_shots)
-
-        except json.JSONDecodeError as e:
-            log_error(f"JSON parsing failed for chunk {i+1} of chapter {chapter.index}: {e}")
-            log_debug(f"Problematic JSON string: {response_json_str[:500]}...")
-
-    return all_shots
-
-
-async def create_storyboard_for_chapters(chapters: list[Chapter]) -> list[Shot]:
-    """
-    并发处理所有章节，为它们创建完整的分镜和提示词。
-    """
-    tasks: list[Coroutine[any, any, list[Shot]]] = []
-    for chapter in chapters:
-        tasks.append(_process_chapter_content(chapter))
-    
-    results_per_chapter = await asyncio.gather(*tasks)
-    
-    # 将所有章节的shots列表扁平化为一个列表
-    all_shots: list[Shot] = [shot for chapter_shots in results_per_chapter for shot in chapter_shots]
-    
-    log_info(f"Storyboard and prompting stage complete. Total shots created: {len(all_shots)}")
-    return all_shots
 </file>
 
 <file path="app/tool.py">
@@ -1972,451 +1295,292 @@ def extract_chapter_id_and_name(title):
     return "", title
 </file>
 
-<file path="test_novel.txt">
-欢迎来到西伯利亚
-
-1
-
-鼻骨断了？我一下揪住了蚊子的衣服，说：「我还要打！你想
-办法 ！」
-
-「别打了！西毒，再打下去你真就没命了！」李哥死死的握着
-我的手说：「认输吧，我对裁判说我们认输！」
-
-「别！」我一下揪住了李哥的领子，死死的拉着，「李哥，别
-认输，别，我求你了！」
-
-「你想死啊！」李哥喊了起来。
-
-「别认输！」我狠狠的揪着李哥的领子不松手，扭头对蚊子
-说：「快想办法！」
-
-蚊子愣了一下，又看了一眼不说话的李哥，赶紧给我处理伤
-势。先清除掉血迹，接着用两个加厚棉棒塞进了我的鼻孔里，
-塞的很深，顶在了断裂的鼻骨上。剧痛过后，那种异物探进脑
-袋里的感觉真让我恶心。
-
-「记着，用嘴巴呼吸！」蚊子拍我的脑袋说道。不用他说我也
-知道，我的鼻子已经无法通气了。
-黑市拳手对对手没有任何的同情，那种看到你受了重伤坚持搏
-斗而对你心生敬佩的剧情只能在电影里看到。比赛开始，芯片
-就迅速逼了上来，真是可怕的对手。
-
-也许我的伤让他大意了，在芯片刚进入攻击距离内，我突然起
-腿。
-
-打拳不能死打，有时候一个小小的变数让谁都招架不住。前腿
-侧踹，自从我踏入黑拳界就用的极少的一个腿法，正好蹬在芯
-片的脸上！
-
-前腿侧踹攻击距离长，启动又快，虽说力量一般，但打在头上
-的话也是有点效果的。芯片没有防住，被我踹的一个后仰。他
-双手的防御开始散乱，我抓住机会，朝他的左侧软肋疯狂连
-扫！
-
-我感觉我才是芯片！这机会抓的简直太帅了！我大张着嘴拼命
-喘气，催动全身力量不停扫踢，我知道过了这村就没这店了！
-
-芯片被我突然启动的连续重扫踢的身体晃荡，但他毕竟是极有
-经验的拳手，立刻恢复了防御。我马上放弃了腿攻，转而用快
-速的拳法进行贴身围剿。我能听见场馆内已经爆棚的呼喊声，
-观众们的激情让我血气上涌，不知疲倦的疯狂挥拳！大脑里只
-有一个念头，就是要摧毁对方！
-
-现在想起来，我觉得我真是疯了，在芯片架好防御的情况下，
-我竟然连续挥拳超过两分钟，一直到这个回合结束，我还在拼
-命的击打抱头的芯片，直到裁判把我拉开。
-坐在拳台角落里，我大口喘着气，双手都在发抖，刚才用力过
-度了。芯片坐在那里正在处理伤势，他的脸上也全都是血，不
-知道被打中了哪里。这麻绳很操蛋，使劲的划过去一下就破
-皮。李哥捧着我的脸说：「西毒，你感觉怎么样，没事吧？」
-
-「我很好……」我喘气喘的说话都不利索。
-
-「你眼睛怎么这么红？」
-
-「红吗？」红不红我自己也看不到，不管他了，爱红不红。新
-的回合一开始，我就冲了上去。这下彻底满足场内所有观众的
-欲望了，我跟芯片像两条发疯的斗狗一样厮杀在了一起。
-
-没错，在很多人的眼中，只有这样，才是黑拳。
-
-我已经记不清我挨了多少拳脚，到最后疼痛感已经消失，打在
-身上只是电击一般的麻，鲜血和汗水在我眼前飞溅，我分不清
-是谁的。一记看上去毫不起眼的摆拳过去，芯片身子一晃，倒
-下了。
-
-我接着的一拳打了个空。看着芯片倒在我的脚下，我忽然产生
-了一种错觉，觉得那倒下的人是我自己。我的意识都恍惚了。
-
-裁判蹲下去给芯片读秒。可芯片一直趴着，一动不动。一只手
-在脑袋前面，还握着拳，另一只手无力的摆在一边，拳头已经
-松开了。
-
-在第七回合，裁判宣布我获胜。我站在那里没有动，我真的是
-一动也不想动，我好累。场馆内沸声四起，我听不清他们在喊
-什么。李哥冲上来，紧紧的抱住了我。我就那么歪在他的身
-上，任凭他在我耳边大声大叫：「西毒，你赢了！你赢了，西
-毒！」
-
-西毒……是我吗？
-
-好多人涌上了拳台，我的思维好像静静漫过的海水，把一切泡
-的都不真实。眼前的景象全是模糊的，只有阿果是清楚的。
-
-我忽然间好想她。
-
-离开拳场，李哥带着我直接去了医院。我在离开的时候很后悔
-没有看到姓秦的跟姓陈的这一对拜把子兄弟。不过在医院听李
-哥说，这两家伙愣在那里一动不动，脸上难看的跟吃了屎一
-样。他们把所有的家底全部赔了进去，买回去的飞机票都是个
-困难。
-
-一场拳赛让他们倾家荡产。真是痛快。
-
-去医院做了手术，固定断裂的鼻骨。当那两个棉棒从我鼻子里
-掏出来的时候，真是又疼又爽。事后医生告诉我，全身的伤还
-有很多，不过没有什么致命的。我说你这不是废话吗，我一动
-全身都疼。
-
-医生白了我一眼，说，你的三根肋骨有不同程度的骨裂，注意
-养护。
-
-晚上躺在病床上，跟散架了似的。李哥坐在我旁边，抽着烟问
-我：「西毒，赢了，说说啥感想。」
-「没有感想，就是……累。」我实话实说。
-
-「你现在可是打败了芯片的拳手，回去让小妖他们知道了还不
-得羡慕死.。」李哥笑着说：「以后你跟他们可就不是一个档次
-的了。」
-
-我忽然想到：「李哥，你在我身上下注了吗？」
-
-「说实话，下是下了，还真没敢多下。下了五万，赚回来四十
-万。」李哥笑道：「早知道我就下四十万的注了。」
-
-「呵呵……」我刚想笑，就感觉鼻子生疼。我说：「那就好。李
-哥，回去后，我不想打拳了。」
-
-「嗯，不打就不打吧，想干点啥李哥支持你。阿果比你大，年
-龄也不小了，她也要过过安定的日子了。」
-
-「咱啥时候回去？」听到阿果，我一时间思归心切。
-
-「等你伤养的差不多了再走，反正现在也不急了。」听得出
-来，李哥也是松了一口气。这时候李哥那两个贴身的小弟从外
-面走进来，说：「李哥，芯片也送进这医院里来了。就在最头
-上的那间病房里，我刚才打听了一下，说是颅内震荡，现在还
-昏迷着呢。」
-
-「这家伙……他这次可害了不少人倾家荡产啊。」李哥说着，点
-了一根烟放在我面前。
-
-「李哥，你知道我不会抽烟。」
-「学学嘛，反正你以后又不打拳了。混社会，总得要抽烟的
-嘛。」李哥说。我一想也是，刚接过香烟，病房门开了，进来
-了三个高大的外国白人，在敞开衣服的胸口处，露出了貌似巨
-大蝴蝶的纹身。
-
-「你们是……」李哥一愣，刚想说什么，他们三个立刻掏出了手
-枪对准了我们，为首的一个白人用很流利的汉语说：「李向
-昂，你别乱动。」
-
-2
-
-这是一个单人病房，空间不大，三个拿枪的白人带着一股子杀
-气。一时间，无数念头闪过我脑海，他们干什么？报复？押注
-在芯片身上输钱的人？还是幕后组织老大请来的杀手……我被那
-黑洞洞的枪口指着，只觉得浑身冰冷。
-
-「你们怎么会知道我的名字！你们干什么的！」李哥是见过世
-面的人，在这种情况下也没有慌乱。虽然被枪指着不能动，但
-语气中却透着一股黑道大哥睥睨江湖的气度。
-
-「李向昂，你在天津还能说上几句话，可是在这里，我劝你最
-好闭嘴。」为首的那个白人一晃枪口，又指着李哥手下那两个
-蠢蠢欲动的小弟：「别逼我，我可不想在这里再杀人。」
-
-再杀人？我心里一惊，难道说他们刚才已经杀人了吗？杀谁
-了？
-
-李哥脸色铁青，并未闭嘴，而是沉声说道：「你们是芯片的
-人？难道输了比赛，就用这种下三滥的手段来报复吗！」
-「芯片，哦，不好意思，刚才他已经死了，就死在了这把枪
-下。」这个白人说着，晃了晃手上那把加了消音器的手枪，
-「留着他已经没用了，我们已经有了新的目标。」
-
-「你们到底是谁！」李哥的声音竟然有一些发颤。
-
-「蝴蝶会，李老大想必知道这个名字吧。」
-
-李哥愣了，他说出来的话带着不敢置信的腔调：「蝴蝶会？你
-们是……俄罗斯黑手党！」
-
-「说的没错。」那白人微微一笑。
-
-我被震惊了！简直不敢相信！面前的家伙竟然是闻名世界的黑
-帮团伙——俄罗斯黑手党的人！那个让俄罗斯政府都束手无策
-的组织？我的天，这他妈哪跟哪啊？
-
-「你们……想干什么？」李哥的声音有点发抖，他这次算是见到
-同道中人了，不过不是一个级别的。
-
-「那我就长话短说了。芯片本来是蝴蝶会物色的拳手，准备要
-他代表组织参加下一届黑市拳峰会的，没想到却败在了这个中
-国小子的手上。所以……」白人的蓝色眼睛紧紧的盯着我：「你
-要代替他。」
-
-「你们凭什么要求我代替他，你们没这个权利！」我徒劳地说
-道。
-
-「这个你说了不算。」白人咧嘴笑道：「我们现在就要带你
-走。」
-「我不走！」我强忍着恐惧，猛的发起狠来：「你们杀了我，
-也别想逃出去，这里是中国，可不是你们的地盘！」
-
-白人听了这话并不生气，却微微一笑，说出了一个名字，让我
-的心里猛然一颤！
-
-从他嘴里说出来的，竟然是我父亲的名字！
-
-「不要那么吃惊，在你参加这场比赛之前，关于你的所有资料
-我们都已经掌握了。如果你不配合的话，我们不仅会杀了你，
-还有你的家人，你的朋友，我们一个都不会放过。相信我，我
-们有这个能力。对于没有利用价值的人，我们从来不手软
-的。」
-
-我惊愕的已经说不出话来。怎么会，怎么会这样？我的大脑瞬
-间一片空白，原本以为一切都已经结束，这帮人却突然出现，
-凭空扼杀了我的希望。为什么？为什么会这样！
-
-「我们的时间已经不多了，芯片的尸体随时会被人发现。我给
-你一分钟的时间选择，是跟我们走，还是留在这里，跟你的家
-人一起变成尸体。」白人用枪指着我，口气中丝毫没有商量的
-余地。
-
-我转头去看李哥，他的脸色已经一片死灰。我明白，在这种情
-况下，他已经完全没辙。俄罗斯黑手党的传言我听说过，他们
-是全球势力范围最广的黑帮组织之一。由于俄罗斯的政府裁
-员，许多军方的精英都被俄罗斯黑手党所吸收，成为对抗政府
-法治的中坚力量。他们公开与社会对抗，明目张胆地进行各种
-犯罪活动。凡是威胁他们利益者，一律惨遭报复，许多政商名
-流被暗杀的事件，即出于他们之手。并且俄罗斯黑手党势力遍
-布全球，在美国都有分支机构。李哥的势力跟他们比起来，简
-直犹如蚂蚁之于大象。
-
-如果他们真的针对我家人和朋友的话，后果不堪设想。以他们
-的情报网，肯定连阿果也不会幸免于难。
-
-我明白，事情已经完全没有转机。我平静了下来，问：「我能
-先打一个电话吗？」
-
-「不好意思，不可以。从今天开始，你不能再跟任何人联
-系。」
-
-「你们要带我去哪？」
-
-「俄罗斯。」
-
-「我要多长时间才能回到中国？」
-
-「顺利的话，一年。在你不死的前提下。」
-
-我绝望了，我知道已经回天无力。事态的发展不受任何人的控
-制。我紧紧的抓着李哥的衣服做最后的嘱托：「李哥，不要告
-诉阿果我去了哪里，不要再让她担心。你只要告诉她，一定要
-让她等我，一年后我会回去找她，一定！还有，打电话告诉我
-家人，随便编一个什么理由都可以，千万别让他们为我担心！
-李哥，我拜托你了！」
-
-李哥的嘴唇在轻轻颤抖，他没有说话，握着我的手点了点头。
-我浑身疼痛的站了起来，说：「我跟你们走，不要伤害任何
-人。」
-
-就这样，我离开了这里，跟着他们去了一个陌生的国度。一切
-许下的誓言，都在残酷的现实面前灰飞烟灭。
-
-这帮人确实神通广大，不费吹灰之力就把我带到了俄罗斯。出
-国原来可以这么简单。说实话，他们在路上很照顾我，因为我
-的身体还没有恢复，不大适应长途跋涉。
-
-这些人对我的身份了如指掌，从根上掐断了我中途逃跑的机
-会。他们可能在中国长期活动，所以汉语说的非常流利。我问
-那个为首的白人叫什么名字，他说自己叫尼古拉耶维奇，不过
-这个名字并不好记，大家都叫他黑桃 K。我也可以这样称呼
-他。
-
-我问他，为什么不叫黑桃 A 呢？A 比 K 大。
-
-他皱皱眉：「我的老大叫黑桃 A。」
-
-我们来到了莫斯科。根本就没有时间领略这座充满传奇性的历
-史古城的风采，我就被直接带到了一架小型私人飞架上，我问
-黑桃 K 要去哪里，他告诉我说，去西伯利亚。
-
-西伯利亚，记忆中好遥远的地方。在我的心目中，它跟北冰洋
-是一个概念。听了我的话，黑桃 K 告诉我，西伯利亚的北面就
-是北冰洋。
-
-我顿时感觉到一股寒意。
-坐在有些颠簸的飞机上，我问：「为什么要去西伯利亚？」
-
-「因为在那里有一个训练营，你要在那儿接受训练。」黑桃 K
-简短地回道。
-
-「朱可夫训练营吗？」我接着问道，心想还真有这地方？
-
-「朱可夫？」黑桃 K 愣了一下，「朱可夫是二战时期的苏联元
-帅，跟训练营有什么关系？」
-
-「难道我说错了吗？」我掰着手指头说：「世界五大黑拳训练
-营，有印尼的班加旺训练营、哥伦比亚的黑十字训练营、阿富
-汉的星月训练营、中印边境的康巴训练营和西伯利亚的朱可夫
-训练营。它们培养了世界上最为优秀的黑市拳拳手，并且把这
-些拳手输出向世界各地，通过参加比赛为这些组织赚取巨额奖
-金。难道不是吗？」
-
-「哦，你们中国人的想象力真是太丰富了，这都是谁告诉你
-的？」黑桃 K 颇为无奈的扶着自己的额头：「怎么说的还跟真
-事一样，我从来就没听说过什么朱可夫训练营，我告诉你，你
-说的这些都是假的。」
-
-「我靠……竟然全都是假的？」我暗暗的想，妈的，被地摊文学
-给骗了。
-
-「那我们将要去的训练营叫什么名字？」我不甘心的问。
-
-「没有名字，这个地方本来是我们蝴蝶会的一个秘密分支机
-构，为了准备一年之后的国际黑市拳峰会，才临时改成了训练
-营。」黑桃 K 转头对我说：「你就叫它训练营，就可以了。」
-
-3
-
-飞机在广袤无垠的高原上飞行，下面的景色极为苍凉壮阔。巨
-大的西伯利亚如同一个沉睡的巨人，一眼望不到边际的躺卧在
-大地之上。黑桃 K 指着下面说：「看，那是贝加尔湖。」
-
-我从飞机上向下看去，只间苍茫辽阔的大地之上，有一片清澈
-无瑕的蓝色，好像撒在大地上的一把蓝色珍珠。湖型狭长弯
-曲，宛如一弯新月，黑桃 K 带着自豪的口气说：「贝加尔湖是
-世界上最深最大的淡水湖，被称作西伯利亚的明眸。」
-
-啊，果真漂亮，那就是贝加尔湖吗？那就是中国史书里所记载
-的「北海」，苏武牧羊的地方？我淡淡地道：「我们汉朝的哥
-们苏武，曾经在这里住了 19 年，天天放羊。」
-
-黑桃 K 扭头看了我一眼，接着咧嘴笑了起来：「真不愿意跟中
-国人打交道。」
-
-「为什么？」
-
-「因为中国人跟俄罗斯人一样，心中都有一个大国情节。不管
-在多么艰苦恶劣的条件下，这种大国情节就像印记一样被刻在
-了骨头里，永远无法抹除。」黑桃 K 耸耸肩，「大国对大国，
-当然不愿意打交道了。用你们中国人的话来说，叫一山不容二
-虎。」
-「哦，我想我现在对你没有什么威胁。」我指着自己的鼻子
-说：「我的鼻骨还没有长好呢。」
-
-黑桃 K 只是笑笑，不再说话。他其实笑的时候挺多，并没有我
-想象中的那么残酷。这个杀手不太冷。
-
-其实从广州到莫斯科，再到这里，我中间不止一次的想过逃
-脱。以他们对我的看护程度，不是没有逃脱的可能。但最后，
-我还是放弃了，我不能拿所有人的性命冒险。黑桃 K 绝对没有
-表面上那么温文尔雅，我逃了，我的家人，我的朋友，还有阿
-果，都会有灭顶之灾。
-
-飞机最后降落在普托兰纳，一块隐藏在西伯利亚广阔原始森林
-里的高原。
-
-下了飞机之后，我并没有感觉到寒冷。空气非常清新，阳光照
-射也很充足，身上暖洋洋的。黑桃 K 告诉我，西伯利亚也有夏
-天，只不过非常短暂。这里的冬天十分严寒，有时达到摄氏零
-下四五十度，能够冻炸我的肺。
-
-「说说黑市拳峰会吧。」在前往训练营的路上，我问黑桃 K。
-走了几步路，我的旧伤又疼了起来。
-
-「国际黑市拳峰会三年举办一次，对整个世界的职业黑拳手来
-说都很重要。哪个组织的代表拳手如果在这场峰会上夺得冠
-军，对于这个组织的整个家族来说都是一个巨大的荣誉，同时
-还能带来巨大金额的生意。」黑桃 K 看我走路费劲，还搀扶了
-我一把，「明白吗？这对我们来说很重要。」
-「这么大的赌注，你们全都押在我一个人身上？」
-
-「不，不，你并不是惟一的，你只是其中之一，就像被你打败
-的芯片一样。一年后，你会和训练营里面的其他拳手一起参加
-峰会。」
-
-「如果我得不到冠军呢。」我终于问了这个我最关心的问题：
-「如果我得不到冠军，你们就会杀了我，我再也不会回到中国
-是吧。」
-
-黑桃 K 笑了起来：「西毒先生，我们是黑帮，不是屠夫。请不
-要把我们想的太坏，除非在没有办法的情况下。」
-
-我稍微安心了些，他又接着说道：「冠军只有一个，谁都不知
-道哪一个人会获得冠军头衔。不管你打赢或者打输，只要你最
-后能够活下来，我们都会按照约定把你送回中国。但是……我想
-你一定不愿意输的，在那个拳台上，输跟死，几乎没有区
-别。」
-
-「还有，」黑桃 K 又道：「只要你能入围，最后活下来的话，
-会有 5 万美金的报酬。」
-
-「你能让我打一个国际长途电话吗？」
-
-「不能，我已经说过了，你不能再和任何人联系。」
-
-这座位于普托兰纳高原的训练营看上去就像是一所监狱，那灰
-色的建筑没有一点生气。黑桃 K 告诉我，本来这个地方是没有
-这么大的，这是后来又扩建起来的。他把我送到了训练营另一
-个白人的手中，就没有他事了。临走的时候，黑桃 K 对我说：
-「嘿，中国小子，希望一年之后我还能有机会把你送回中
-国。」
-
-看着黑桃 K 离去，我忽然想起了一句老话，有人的地方，就有
-江湖。
-
-「嘿，你，会说英语吗？」训练营的那个高大健壮的白人用英
-语问我。这人的体格极其强健，脸上的两道皱纹又深又长，好
-像两道刀疤。看样子应该是这里的教官一类的。
-
-「会说一点，说的不好。」我也用英语回答道。
-
-「那没有办法，你以后慢慢适应吧。因为这里没有人会说中国
-话，包括我。」白人尽量说的很慢，以便我能听懂，「我是这
-里的第一教官，耶奇科夫斯基，前陆军上尉。你叫我教官就行
-了。」
-
-「哦，教官，我能先打一个电话吗？」
-
-「不能，这里没有任何通讯设备。」教官冷冷地回道。
-
-他带着我走进训练营。这里很空旷，就像它所在的西伯利亚一
-样毫无生气。我注意到里面还有一些拿着武器的军士，人并不
-多，但也有十几个，他们见了这位叫做「耶奇科夫斯基」的教
-官都立正行礼，而教官却只是略略的点头致意。
-
-教官带着我去见了一个医生。我能认出来他是医生，因为他穿
-着一件白色大褂。好像世界上所有的医生都是这身打扮。医生
-检查了一下我之前的伤势，尤其是我那还没有愈合的鼻骨，转
-头对教官叽里呱啦说了一通话。我一句也听不懂，不过听语速
-和发音，应该是俄语。
-
-教官听了医生的话后点了点头，带着我进了一个房间，对我
-说：「你身上的伤势还不允许参加训练，住在这个房间里，十
-五天之后开始训练。」
-
-「要把我关在这个房间里十五天？」我看了一眼这个不大的地
-方，一张床，一张桌子，上面摆放着一台老式的电脑，还是显
-示器压在歪倒的主机上那种。在房间里还吊着一个沙袋，室内
-有一个小厕所，除此之外别无仅有。
-
-「十五天，你的任务是让自己的身体快速痊愈，我想够了。」
-教官指着门外说，「每天会有人过来给你送饭。还有，不要想
-着从这里跑出去，外面的那些士兵会当场射杀你。」
+<file path="run.py">
+# run.py
+import asyncio
+import argparse
+from pathlib import Path
+
+from app.config import settings
+from app.logger import log_info, log_error
+from app.llm_client import test_llm_connections
+from app.pipeline import Pipeline
+
+
+async def main():
+    """主异步函数，协调整个工作流"""
+    parser = argparse.ArgumentParser(
+        description="TaleStreamAI - 自动化小说转视频工作流"
+    )
+    parser.add_argument(
+        "source",
+        nargs="?",
+        default=settings.book_source,
+        help=f"书籍来源：可以是起点ID或本地.txt文件路径 (默认为: {settings.book_source})",
+    )
+    parser.add_argument(
+        "--book_id",
+        default=settings.custom_book_id,
+        help="为本地文件指定一个自定义的书籍ID (默认为文件名)",
+    )
+    parser.add_argument(
+        "--test-connections",
+        action="store_true",
+        help="仅运行API连接测试后退出",
+    )
+
+    args = parser.parse_args()
+
+    if args.test_connections:
+        await test_llm_connections()
+        return
+
+    # 更新配置以反映命令行参数
+    # (dataclasses 是不可变的, 所以我们创建一个新的)
+    # 技巧：使用 object.__setattr__ 来绕过 frozen=True 的限制进行修改
+    # 但更清晰的方式是在启动时就决定好配置
+    # 这里为了简单，我们假设 settings 已通过 .env 文件配置好，命令行仅用于临时覆盖
+    # 实际生产中可能会用更复杂的配置加载逻辑
+
+    # 使用命令行参数来确定 book_id
+    final_book_id = args.book_id
+    if not final_book_id:
+        if args.source.endswith(".txt"):
+            final_book_id = Path(args.source).stem
+        else:
+            final_book_id = args.source
+
+    log_info(f"🚀 工作流启动，书籍ID: {final_book_id}")
+
+    # 初始化并运行流水线
+    pipeline = Pipeline(
+        book_id=final_book_id,
+        source_file=args.source if args.source.endswith(".txt") else None,
+    )
+
+    try:
+        await pipeline.run()
+        log_info("🎉 工作流全部阶段成功完成！")
+    except Exception as e:
+        log_error(f"工作流执行过程中发生未捕获的严重错误: {e}", exc_info=True)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+</file>
+
+<file path="app/stages/storyboard.py">
+# app/stages/storyboard.py
+import re
+import json
+import asyncio
+from typing import Coroutine
+
+import tiktoken
+from ..config import settings
+from ..llm_client import storyboard_client, prompt_client
+from ..logger import log_info, log_error, log_warning, log_debug
+from ..models import Chapter, Shot
+
+# --- Prompts ---
+STORYBOARD_SYSTEM_PROMPT = """
+你是一个资深的剧本编辑。你的任务是根据我输入的小说内容，生成详细的分镜脚本。
+请遵循以下规则：
+1.  **高密度分镜**: 为每2到4句话（特别是对话或关键动作描述）创建一个独立的分镜。确保充分捕捉场景的动态变化和人物的情感交流。不要遗漏任何情节。
+2.  **完整内容**: `text` 字段必须包含原始的小说文本，不要进行任何形式的概括或提炼。
+3.  **镜头语言**: `lensLanguage_cn` 和 `lensLanguage_en` 需要详细描述镜头，包含以下元素：
+    -   **角色**: 年龄、性别、外观、角色类型（如：年轻男子, 憔悴的拳手）。不要使用人名。
+    -   **动作**: 角色的具体动作或表情（如：揪住衣领, 疲惫地喘气, 愤怒地呐喊）。
+    -   **场景**: 故事发生的地点或背景（如：昏暗的地下拳台角落, 明亮的医院病房）。
+    -   **情绪**: 场景的氛围或角色的情感基调（如：紧张, 绝望, 痛苦, 狂喜）。
+    -   **风格**: 图像的艺术风格，固定为 **动漫风格, 细节丰富, 插画感**。
+    -   **镜头角度**: 摄像机的视角或构图（如：特写, 中景, 过肩镜头, 俯视）。
+    -   **灯光与环境**: 光线条件或环境氛围（如：刺眼的顶光, 窗外的月光, 闪烁的灯光）。
+4.  **镜头语言格式**: 必须是逗号分隔的关键词组合，例如：`年轻男子, 揪着李哥的领子, 拳台角落, 绝望, 动漫风格, 特写, 顶光`。
+
+请严格按照以下JSON格式返回，不要添加任何其他文字或解释，只返回有效的JSON数组：
+[
+    {
+        "id": "1",
+        "text": "鼻骨断了？我一下揪住了蚊子的衣服，说：「我还要打！你想办法！」",
+        "lensLanguage_cn": "年轻拳手, 揪住衣服, 拳台, 愤怒、急切, 动漫风格, 插画感, 中景, 强光",
+        "lensLanguage_en": "young boxer, grabbing clothes, boxing ring, angry, urgent, anime style, detailed, illustration, medium shot, strong light"
+    }
+]
+"""
+
+PROMPT_REFINE_SYSTEM_PROMPT = """
+你是一位专业的AI绘画提示词工程师。你的任务是基于给定的场景描述，生成一段高质量、细节丰富的英文提示词，用于动漫风格的图像生成。
+请遵循以下规则：
+1.  **核心要素**: 提示词必须以 `masterpiece, best quality, highres` 开头。
+2.  **风格统一**: 必须包含 `anime style, detailed illustration, vibrant colors` 来确保画风一致。
+3.  **细节丰富**: 将中文描述（角色、动作、场景、情绪、灯光）转化为具体、生动的英文关键词。使用括号 `()` 来强调重要元素，例如 `(red eyes:1.2)`。
+4.  **格式**: 所有关键词用逗号 `,` 分隔。
+5.  **简洁**: 不要添加任何解释或无关的文字，直接输出提示词。
+
+例如，如果输入是 "年轻男子, 愤怒地呐喊, 雨中的街道, 绝望, 霓虹灯光, 特写"，一个好的输出是：
+masterpiece, best quality, highres, anime style, detailed illustration, vibrant colors, 1boy, young man, (screaming in anger:1.3), close-up shot, rain, wet clothes, desperate expression, neon lights reflection, dramatic lighting
+"""
+
+
+def _split_content_by_tokens(
+    content: str, max_tokens: int, tokenzer_model_name: str = "gpt-4o"
+) -> list[str]:
+    """按token数量将文本分割成块。"""
+    log_debug(f"Splitting content by tokens, max_tokens={max_tokens}")
+    try:
+        encoding = tiktoken.encoding_for_model(tokenzer_model_name)
+    except KeyError:
+        log_warning(f"Model '{tokenzer_model_name}' not found for tiktoken, using 'cl100k_base'.")
+        encoding = tiktoken.get_encoding("cl100k_base")
+
+    paragraphs = content.split("\n")
+    chunks, current_chunk_paragraphs, current_chunk_tokens = [], [], 0
+
+    for p in paragraphs:
+        if not p.strip():
+            continue
+        p_tokens = len(encoding.encode(p))
+
+        if p_tokens > max_tokens:
+            log_warning(
+                f"Paragraph with {p_tokens} tokens exceeds max_tokens {max_tokens}, force splitting."
+            )
+            encoded_p = encoding.encode(p)
+            for i in range(0, len(encoded_p), max_tokens):
+                chunks.append(encoding.decode(encoded_p[i : i + max_tokens]))
+            continue
+
+        if current_chunk_tokens + p_tokens > max_tokens:
+            chunks.append("\n".join(current_chunk_paragraphs))
+            current_chunk_paragraphs = [p]
+            current_chunk_tokens = p_tokens
+        else:
+            current_chunk_paragraphs.append(p)
+            current_chunk_tokens += p_tokens
+
+    if current_chunk_paragraphs:
+        chunks.append("\n".join(current_chunk_paragraphs))
+
+    log_info(f"Content split into {len(chunks)} chunks.")
+    return chunks
+
+
+async def _refine_shot_prompt(shot: Shot) -> Shot:
+    """为单个Shot对象优化生成图像的提示词"""
+    if not shot.storyboard_prompt_en:
+        shot.error = "Missing storyboard_prompt_en for refinement."
+        log_warning(
+            f"Skipping prompt refinement for shot {shot.get_full_id()}: No English storyboard prompt."
+        )
+        return shot
+
+    messages = [{"role": "user", "content": shot.storyboard_prompt_en}]
+    refined_prompt = await prompt_client.chat_completion(
+        messages, system=PROMPT_REFINE_SYSTEM_PROMPT
+    )
+
+    if "ERROR" in refined_prompt:
+        shot.error = f"Prompt refinement failed: {refined_prompt}"
+        log_error(f"Failed to refine prompt for shot {shot.get_full_id()}: {refined_prompt}")
+        # Fallback: use the original EN prompt and add the global style
+        shot.image_prompt = f"{shot.storyboard_prompt_en}, {settings.image_style_prompt}"
+    else:
+        shot.image_prompt = f"{refined_prompt}, {settings.image_style_prompt}"
+
+    return shot
+
+
+async def _process_chapter_content(chapter: Chapter) -> list[Shot]:
+    """处理单个章节的完整内容，生成带有优化提示词的Shots列表"""
+    storyboard_config = settings.storyboard_llm
+    content_chunks = _split_content_by_tokens(
+        chapter.content,
+        max_tokens=storyboard_config.max_tokens,
+    )
+
+    all_shots: list[Shot] = []
+    shot_id_counter = 1
+
+    for i, chunk in enumerate(content_chunks):
+        log_info(f"Processing chunk {i + 1}/{len(content_chunks)} for chapter {chapter.index}...")
+        messages = [{"role": "user", "content": chunk}]
+        response_json_str = await storyboard_client.chat_completion(
+            messages, system=STORYBOARD_SYSTEM_PROMPT
+        )
+
+        if "ERROR" in response_json_str:
+            log_error(
+                f"Storyboard generation failed for chunk {i + 1} of chapter {chapter.index}: {response_json_str}"
+            )
+            continue
+
+        try:
+            # Clean up the JSON string before parsing
+            response_json_str = re.sub(r"```json\s*|\s*```", "", response_json_str).strip()
+            storyboard_data = json.loads(response_json_str)
+            if not isinstance(storyboard_data, list):
+                # Try to find a list within a dictionary if the LLM wrapped it
+                if isinstance(storyboard_data, dict):
+                    found_list = False
+                    for key, value in storyboard_data.items():
+                        if isinstance(value, list):
+                            storyboard_data = value
+                            found_list = True
+                            log_warning(
+                                f"LLM returned a dictionary, but a list was found and extracted from key '{key}'."
+                            )
+                            break
+                    if not found_list:
+                        raise json.JSONDecodeError(
+                            "Response is not a list and no list found in dictionary values",
+                            response_json_str,
+                            0,
+                        )
+                else:
+                    raise json.JSONDecodeError("Response is not a list", response_json_str, 0)
+
+            proto_shots = []
+            for item in storyboard_data:
+                shot = Shot(
+                    shot_id=shot_id_counter,
+                    chapter_index=chapter.index,
+                    original_text=item.get("text", ""),
+                    storyboard_prompt_cn=item.get("lensLanguage_cn", ""),
+                    storyboard_prompt_en=item.get("lensLanguage_en", ""),
+                )
+                proto_shots.append(shot)
+                shot_id_counter += 1
+
+            # 并发优化所有这些新生成shot的提示词
+            refinement_tasks = [_refine_shot_prompt(s) for s in proto_shots]
+            refined_shots = await asyncio.gather(*refinement_tasks)
+            all_shots.extend(refined_shots)
+
+        except json.JSONDecodeError as e:
+            log_error(f"JSON parsing failed for chunk {i + 1} of chapter {chapter.index}: {e}")
+            log_debug(f"Problematic JSON string: {response_json_str[:500]}...")
+
+    return all_shots
+
+
+async def create_storyboard_for_chapters(chapters: list[Chapter]) -> list[Shot]:
+    """
+    并发处理所有章节，为它们创建完整的分镜和提示词。
+    """
+    tasks: list[Coroutine[any, any, list[Shot]]] = []
+    for chapter in chapters:
+        tasks.append(_process_chapter_content(chapter))
+
+    results_per_chapter = await asyncio.gather(*tasks)
+
+    # 将所有章节的shots列表扁平化为一个列表
+    all_shots: list[Shot] = [
+        shot for chapter_shots in results_per_chapter for shot in chapter_shots
+    ]
+
+    log_info(f"Storyboard and prompting stage complete. Total shots created: {len(all_shots)}")
+    return all_shots
 </file>
 
 <file path="app/logger.py">
@@ -2425,12 +1589,11 @@ def extract_chapter_id_and_name(title):
 提供詳細的進度追蹤和狀態記錄
 """
 
-import logging
 import os
 import sys
-from datetime import datetime
+import logging
 from pathlib import Path
-from typing import Optional, Any
+from typing import Optional
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -2651,274 +1814,120 @@ def log_concurrent(
 </file>
 
 <file path="README.md">
-# AI 小说推文自动化工作流
+# TaleStreamAI v1.0 🚀
 
-[成片-6小时](https://www.bilibili.com/video/BV1mmQvYEEwb/)
-[爱发电](https://afdian.com/a/dmzw1918)
+一个基于现代Python构建的、异步的、流水线驱动的AI小说转视频自动化工具。
 
-## 项目结构
+[B站演示-6小时成片](https://www.bilibili.com/video/BV1mmQvYEEwb/) | [爱发电支持](https://afdian.com/a/dmzw1918)
 
-```
-.
-├── app/                    # 应用核心模块
-├── data/
-│   └── book/              # 书籍数据
-├── docs/                  # 文档
-├── tests/                 # 测试
-├── pyproject.toml         # 项目配置（唯一依赖管理来源）
-└── README.md
-```
+---
 
-## 项目使用到的技术
+## ✨ 核心特性
 
-- **语音合成**: Microsoft Edge TTS (替代 CosyVoice)
-- **图像生成**: Flux API via Pollinations.ai (替代 Stable Diffusion)
-- **大模型**: DeepSeek-V3, Gemini-2.0-flash
-- **视频处理**: FFmpeg GPU 加速版
+* **现代化架构**: 采用基于 `asyncio` 的异步流水线，将I/O密集型任务（API调用）与CPU密集型任务（视频处理）分离，最大化性能。
+* **高度并发**: 充分利用异步I/O和多进程，同时处理内容获取、分镜生成、资产合成等多个环节。
+* **健壮的缓存**: 内置基于参数哈希的缓存机制，昂贵的API调用（LLM、图像、音频）会被自动缓存，极大加速调试和重复运行。
+* **配置驱动**: 所有关键参数通过 `.env` 文件集中管理，清晰易懂。
+* **模块化设计**: 清晰的四阶段流水线 (`Content` -> `Storyboard` -> `Assets` -> `Finalizer`)，易于维护和扩展。
 
-## 项目流程
+## 🛠️ 技术栈
 
-| 文件名       | 功能           | 技术栈                   | 数据流转           |
-| ------------ | -------------- | ------------------------ | ------------------ |
-| main.py      | 获取书籍内容   | 爬虫 + 本地文件支持      | 原始文本           |
-| board.py     | 生成章节分镜   | Gemini-2.0-flash         | text → lensLanguage_en |
-| prompt.py    | 润色分镜提示词 | DeepSeek-v3              | lensLanguage_en → lensLanguage_end |
-| image.py     | 生成图片       | Flux API                 | lensLanguage_end → images |
-| audio.py     | 生成音频       | Edge TTS + 异步并发      | text → audio + subtitles |
-| tts.py       | 生成字幕       | Edge TTS 原生字幕        | 字幕时間校正       |
-| video.py     | 生成视频       | FFmpeg GPU 加速版        | images + audio → videos |
-| video_end.py | 生成完整视频   | FFmpeg GPU 加速版        | videos → final output |
+* **核心框架**: Python 3.12+, Asyncio
+* **LLM编排**: `openai` SDK (兼容所有OpenAI API格式的服务)
+* **语音合成**: Microsoft Edge TTS (`edge-tts`)
+* **图像生成**: 任何兼容的文生图API (默认为Flux)
+* **视频处理**: `moviepy`, `ffmpeg`
+* **依赖管理**: `uv`
 
-### 🔧 关键数据流修复
+---
 
-**重要更新**: 修复了关键的数据流断裂问题：
-- 在 `board.py` 和 `image.py` 之间添加了 `prompt.py` 处理步骤
-- 确保 `lensLanguage_en` 正确转换为 `lensLanguage_end` 用于图片生成
-- 使用 pathlib 替代 f-string 路径拼接，提升跨平台兼容性
+## 🚀 快速开始
 
-## 本地运行
+> 强烈建议使用 Python 3.12 或更高版本。
 
-> 本项目使用 **uv** 来管理依赖，建议 Python 版本 `>=3.12`
-
-### 1. 安装 uv
-
+### 1. 安装 uv (如果尚未安装)
 ```shell
-# 通过 pip 安装
-pip install uv
-
-# 或通过官方安装脚本（推荐）
+# macOS / Linux
 curl -LsSf https://astral.sh/uv/install.sh | sh
+# Windows
+pip install uv
 ```
 
-### 2. 克隆项目并设置环境
+### 2. 克隆并设置环境
 
 ```shell
 git clone https://github.com/t41372/TaleStreamAI.git
 cd TaleStreamAI
 
-# 创建虚拟环境并安装依赖（一步完成）
+# 使用uv一键创建虚拟环境并安装所有依赖
 uv sync
 ```
 
-### 3. 激活虚拟环境
+### 3. 配置环境变量
 
-```shell
-# Windows
-.venv\Scripts\activate
-
-# macOS/Linux  
-source .venv/bin/activate
-```
-
-### 4. 环境配置
-
-复制 `.env.example` 文件，改名为 `.env` 并配置API密钥：
+复制 `.env.example` 为 `.env`，并填入你的API密钥等信息。
 
 ```bash
-# 大模型配置
-STORYBOARD_API_KEY=your_gemini_api_key      # 分镜生成
-PROMPT_API_KEY=your_deepseek_api_key        # 提示词优化
-
-# LLM 并发配置
-LLM_THREADS=3                               # LLM API 最大并发数
-VERBOSE_LOGGING=true                        # 开启详细日志
-
-# Edge TTS 配置  
-EDGE_TTS_VOICE=zh-CN-YunxiNeural           # 中文语音
-AUDIO_THREADS=5                             # 音频生成并发数
-
-# Flux 图像生成配置
-FLUX_WIDTH=1024
-FLUX_HEIGHT=1024
-FLUX_ENHANCE=false                          # 默认关闭图像增强
+# .env
+COOKIE= # 如果需要爬取起点，请填入Cookie
+STORYBOARD_API_KEY=your_gemini_or_other_llm_api_key
+STORYBOARD_API_URL=https://...
+PROMPT_API_KEY=your_deepseek_or_other_llm_api_key
+PROMPT_API_URL=https://...
 ```
 
-**关于起点小说**: 如需抓取起点小说，请配置 `COOKIE` 为起点达人中心的Cookie [起点达人中心](https://koc.yuewen.com/home)
+### 4. 运行！
 
-### 5. 安装 FFmpeg（可选，用于视频生成）
-
-推荐安装GPU加速版 FFmpeg: [Github Releases](https://github.com/BtbN/FFmpeg-Builds/releases)
-
-检查硬件加速支持:
-```shell
-ffmpeg -hwaccels
-```
-
-## 运行项目
-
-### 架构与数据流
-
-详细的架构说明请参考: [📖 架构和数据流文档](docs/ARCHITECTURE_AND_DATA_FLOW.md)
-
-核心数据流：
-```
-文本内容 → 分镜生成 → 提示词优化 → 图片生成 → 音频合成 → 视频组装
-```
-
-### 快速开始（推荐）
+程序现在拥有唯一的入口 `run.py`。
 
 ```shell
-# 在线小说处理
-uv run main.py 1043294775
+# --- 处理来自本地文件的的小说 ---
+# 使用 test_novel.txt，书籍ID将自动设为 "test_novel"
+uv run run.py test_novel.txt
 
-# 本地小说文件处理  
-uv run main.py novel.txt
+# 为本地文件指定一个自定义的书籍ID
+uv run run.py your_novel.txt --book_id "my-epic-story"
 
-# 指定自定义书籍ID
-uv run main.py novel.txt my_book_id
+# --- 处理来自网络的起点小说 ---
+# 使用起点小说ID
+uv run run.py 1043294775
+
+# --- 仅测试API连接 ---
+uv run run.py --test-connections
 ```
 
-### 分步执行
+所有生成的数据，包括缓存和最终视频，都将保存在 `data/book/{book_id}/` 目录下。
 
-如需要调试特定步骤，可分别执行：
+-----
 
-```shell
-# 1. 获取小说内容
-uv run python -m app.main        
+## 🏛️ 架构概览
 
-# 2. 生成分镜
-uv run python -m app.board       
+TaleStreamAI 的核心是一个四阶段的异步流水线 (`app/pipeline.py`)：
 
-# 3. 优化提示词（关键步骤！）
-uv run python -m app.prompt      
+1.  **Content Stage (`app/stages/content.py`)**:
 
-# 4. 生成图片
-uv run python -m app.image       
+      * 负责从网络或本地文件获取原始小说文本。
+      * 将文本分割成章节 (`Chapter` 对象)。
 
-# 5. 合成音频
-uv run python -m app.audio       
+2.  **Storyboard Stage (`app/stages/storyboard.py`)**:
 
-# 6. 生成字幕  
-uv run python -m app.tts         
+      * 接收 `Chapter` 对象，通过LLM将其内容转化为分镜脚本。
+      * 对每个分镜的描述进行二次LLM调用，优化为高质量的图像生成Prompt。
+      * 输出包含完整视觉指令的 `Shot` 对象列表。
 
-# 7. 制作分镜视频
-uv run python -m app.video       
+3.  **Assets Stage (`app/stages/assets.py`)**:
 
-# 8. 最终合成
-uv run python -m app.video_end   
-```
+      * 接收 `Shot` 对象列表。
+      * **并行处理**:
+          * 使用 `asyncio` 并发调用TTS和图像API，生成音频和图片。
+          * 使用 `ProcessPoolExecutor` 将CPU密集型的视频片段合成任务分发到不同进程，避免阻塞。
+      * 输出被媒体文件路径填充了的 `Shot` 对象。
 
-**重要**: 步骤3（提示词优化）是关键环节，不可跳过！
+4.  **Finalizer Stage (`app/stages/finalizer.py`)**:
 
-### API 连接测试
-
-```shell
-# 测试所有API连接
-uv run main.py --test-api
-```
-
-## 核心优势
-
-### v0.2.0 重大更新 - 架构优化
-
-1. **🔧 关键修复**: 
-   - 修复了分镜→图片生成的数据流断裂问题
-   - 确保提示词正确优化后再进行图片生成
-   - 使用现代 pathlib 替代 f-string 路径拼接
-
-2. **无需复杂部署**: 
-   - 移除 Stable Diffusion 本地部署需求
-   - 移除 Whisper 模型下载需求
-   - 使用云端 API 服务，开箱即用
-
-2. **更高性能**:
-   - 异步并发处理，大幅提升速度
-   - Edge TTS 原生字幕，准确性更高
-   - 环境变量控制并发数，适应不同硬件
-
-3. **更稳定可靠**:
-   - Microsoft Edge TTS 服务稳定
-   - 完善的错误处理和重试机制
-   - 详细的日志记录，便于调试
-
-4. **灵活易用**:
-   - 支持本地 TXT 文件处理
-   - 自动章节分割
-   - 向后兼容原有工作流
-
-## 开发指南
-
-### 添加新依赖
-
-```shell
-# 添加生产依赖
-uv add package_name
-
-# 添加开发依赖  
-uv add --dev package_name
-```
-
-### 运行测试
-
-```shell
-# 运行所有测试
-uv run pytest
-
-# 运行特定测试
-uv run pytest tests/test_edge_tts.py -v
-```
-
-### 代码格式化
-
-```shell
-# 格式化代码
-uv run black .
-```
-
-## 故障排除
-
-### 常见问题
-
-1. **Edge TTS 连接失败**
-   - 检查网络连接
-   - 确认防火墙设置
-   - 尝试更换语音模型
-
-2. **LLM API 调用失败**  
-   - 验证 API 密钥正确性
-   - 检查 API 额度和限制
-   - 调整并发数 `LLM_THREADS`
-
-3. **内存不足**
-   - 降低并发数 `AUDIO_THREADS` 和 `LLM_THREADS`
-   - 减少批处理大小
-   - 考虑分批处理长文本
-
-### 日志调试
-
-开启详细日志以获得更多调试信息：
-
-```bash
-VERBOSE_LOGGING=true uv run main.py novel.txt
-```
-
-## 许可证
-
-[License 信息]
-
-## 贡献
-
-欢迎提交 Issue 和 Pull Request！
+      * 接收已处理的 `Shot` 对象列表。
+      * 使用 `ffmpeg` 高效地将所有视频片段合并为最终的MP4文件。
+      * 同时合并所有字幕，生成一个与视频匹配的 `.srt` 文件。
 </file>
 
 <file path="app/llm_client.py">
@@ -2930,14 +1939,27 @@ VERBOSE_LOGGING=true uv run main.py novel.txt
 import sys
 import asyncio
 import json
+import random
 from typing import AsyncIterator, Any
 
-from openai import AsyncOpenAI, APIError, APIConnectionError, RateLimitError, AsyncStream
+import tiktoken
+from httpx import RemoteProtocolError
+from openai import (
+    AsyncOpenAI,
+    APIError,
+    APIConnectionError,
+    RateLimitError,
+    AsyncStream,
+)
 from openai.types.chat import ChatCompletionChunk, ChatCompletionMessageParam
 
 from .config import LLMConfig, settings
 from .logger import log_error, log_info, log_debug
 from .cache import llm_cache
+
+
+EMOJI_LIST = ["🚀", "💡", "✨", "🤖", "🧠", "✍️", "🎨", "🎬", "🎶", "💬"]
+
 
 class UnifiedLLMClient:
     def __init__(self, config: LLMConfig):
@@ -2969,7 +1991,7 @@ class UnifiedLLMClient:
         # which is required by our caching decorator.
         messages_json = json.dumps(messages)
         return await self._cached_chat_completion(messages_json, system=system)
-        
+
     async def chat_completion_stream(
         self, messages: list[dict[str, Any]], system: str = ""
     ) -> AsyncIterator[str]:
@@ -2988,137 +2010,118 @@ class UnifiedLLMClient:
         核心流式实现，包含详细日志和用户反馈。
         """
         log_debug(f"System prompt: {system}")
-        
+
+        # 为每个 LLM 调用创建一个独特的 emoji 和随机数
+        random_emoji = random.choice(EMOJI_LIST)
+        random_number = str(random.randint(0, 9))
+        call_id = f"{random_emoji}{random_number}"
+
         # OpenAI的SDK类型检查很严格，这里进行转换
-        final_messages: list[ChatCompletionMessageParam] = messages # type: ignore
+        final_messages: list[ChatCompletionMessageParam] = messages  # type: ignore
         if system:
             final_messages.insert(0, {"role": "system", "content": system})
 
         stream: AsyncStream[ChatCompletionChunk] | None = None
-        try:
-            stream = await self.client.chat.completions.create(
-                model=self.config.model,
-                messages=final_messages,
-                stream=True,
-                temperature=0.5,
-            )
-            # 用户反馈开始
-            sys.stdout.write(f"LLM ({self.config.model}): ")
-            sys.stdout.flush()
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                stream = await self.client.chat.completions.create(
+                    model=self.config.model,
+                    messages=final_messages,
+                    stream=True,
+                    temperature=0.5,
+                )
 
-            async for chunk in stream:
-                # 检查是否有 'reasoning' (某些模型支持)
-                if (
-                    hasattr(chunk.choices[0].delta, "tool_calls") # Groq/OpenAI reasoning in tool_calls
-                    and chunk.choices[0].delta.tool_calls
-                ):
-                    sys.stdout.write('.')
-                    sys.stdout.flush()
+                # 在输出前，打印最后一个 message 的前 100 个字符 到 dev null
+                print(f"LLM ({self.config.model}) 开始输出 [{call_id}]:")
+                print(f"\"\"\"{final_messages[-1]['content'][:50]}...\"\"\"")
+                # 输出 message 的总 token 数 (用 tiktoken 计算)
 
-                if content := chunk.choices[0].delta.content:
-                    sys.stdout.write('*')
-                    sys.stdout.flush()
-                    yield content
-            
-            # 用户反馈结束
-            sys.stdout.write("\n")
-            sys.stdout.flush()
+                encoding = tiktoken.encoding_for_model("gpt-4o")
+                total_tokens = sum(
+                    len(encoding.encode(m["content"])) for m in final_messages if m.get("content")
+                )
+                print(f"⭐️ 总 token 数: {total_tokens}\n")
 
-        except (APIConnectionError, RateLimitError, APIError) as e:
-            log_error(f"LLM API Error for model {self.config.model}: {e}")
-            # 在流中产生一个错误信息，让下游知道
-            yield f"ERROR: LLM call failed. {e}"
-        finally:
-            if stream:
-                await stream.close()
-                log_debug("LLM Stream closed.")
+                sys.stdout.flush()
+
+                # 每 4 个推理 chunk 打印一个点，每 4 个内容 chunk 打印一个星号
+                reasoning_counter = 0
+                content_counter = 0
+                async for chunk in stream:
+                    # 检查是否有 'reasoning' (某些模型支持)
+                    if (
+                        hasattr(chunk.choices[0].delta, "reasoning_content")
+                        and chunk.choices[0].delta.reasoning_content
+                    ):
+                        reasoning_counter += 1
+                        if reasoning_counter % 4 == 0:
+                            sys.stdout.write(random_number)
+                            sys.stdout.flush()
+
+                    if content := chunk.choices[0].delta.content:
+                        content_counter += 1
+                        if content_counter % 4 == 0:
+                            sys.stdout.write(random_emoji)
+                            sys.stdout.flush()
+                        yield content
+
+                # 用户反馈结束
+                sys.stdout.write(f"\nLLM Call: {call_id} 运行完成\n")
+                sys.stdout.flush()
+                return  # 成功完成，退出重试循环
+
+            except (APIConnectionError, RateLimitError, APIError, RemoteProtocolError) as e:
+                log_info(
+                    f"LLM API Error on attempt {attempt + 1}/{max_retries} for model {self.config.model}: {e}"
+                )
+                if attempt < max_retries - 1:
+                    wait_time = 2**attempt
+                    log_info(f"Retrying in {wait_time}s...")
+                    await asyncio.sleep(wait_time)
+                else:
+                    log_error(
+                        f"LLM call failed after {max_retries} attempts for model {self.config.model}."
+                    )
+                    yield f"ERROR: LLM call failed. {e}"
+            finally:
+                if stream:
+                    await stream.close()
+                    log_debug(f"LLM Stream closed for call {call_id}.")
+
+        # 如果所有重试都失败了，确保有一个最终的错误信息
+        log_error(f"LLM call {call_id} failed completely after all retries.")
+
 
 # 全局客户端实例
 storyboard_client = UnifiedLLMClient(settings.storyboard_llm)
 prompt_client = UnifiedLLMClient(settings.prompt_llm)
 
+
 async def test_llm_connections():
     log_info("Testing LLM connections...")
     test_messages = [{"role": "user", "content": "Hello!"}]
-    
+
     log_info("Testing Storyboard Client...")
     storyboard_response = await storyboard_client.chat_completion(test_messages)
     if "ERROR" in storyboard_response:
         log_error("Storyboard client test FAILED.")
-        else:
+    else:
         log_info(f"Storyboard client test OK. Response: {storyboard_response[:50]}...")
 
     log_info("Testing Prompt Client...")
     prompt_response = await prompt_client.chat_completion(test_messages)
     if "ERROR" in prompt_response:
         log_error("Prompt client test FAILED.")
-            else:
+    else:
         log_info(f"Prompt client test OK. Response: {prompt_response[:50]}...")
-</file>
-
-<file path=".env.example">
-COOKIE=
-
-# 大模型配置 - OpenAI兼容格式
-# 用於分鏡生成的模型配置
-STORYBOARD_API_KEY=
-STORYBOARD_API_URL=https://generativelanguage.googleapis.com/v1beta/openai/
-STORYBOARD_MODEL=gemini-2.0-flash
-
-# 用於圖片提示詞生成的模型配置
-PROMPT_API_KEY=
-PROMPT_API_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
-PROMPT_MODEL=deepseek-v3
-
-# LLM 並發配置
-LLM_THREADS=3                           # LLM API 最大並發數
-LLM_TIMEOUT=120                         # LLM API 請求超時時間(秒)
-LLM_RETRY_ATTEMPTS=3                    # LLM API 重試次數
-VERBOSE_LOGGING=true                    # 是否開啟詳細日誌
-
-# 備用：阿里雲通義千問配置 (兼容模式)
-AL_API_KEY=
-AL_API_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
-
-# 備用：Gemini API配置
-GEMINI_API_KEY=
-GEMINI_API_URL=https://generativelanguage.googleapis.com/v1beta/openai/
-
-# 文生图配置 - 使用 Flux API
-FLUX_WIDTH=1024
-FLUX_HEIGHT=1024
-FLUX_MODEL=flux
-FLUX_SEED=
-FLUX_ENHANCE=false
-
-# 高清修复配置
-UPSCALY_ENABLE=false
-UPSCAYL_SCALE=4
-UPSCAYL_MODEL=realesr-animevideov3-x4
-UPSCALY_FILE_TYPE=jpg
-
-# Edge TTS 配置
-EDGE_TTS_VOICE=zh-CN-YunxiNeural     # Edge TTS 语音
-AUDIO_THREADS=5                       # 音频生成最大并发数
-USE_ASYNC_AUDIO=true                  # 是否使用异步音频生成
-
-# 分段视频生成配置
-VIDEO_THREADS=4         # 视频生成线程数
-PORTRAIT_MODE=True      # 是否是竖屏模式
-VIDEO_WIDTH=750         # 视频宽度
-VIDEO_HEIGHT=1280       # 视频高度
-MOVE_DISTANCE=0.1       # 移动距离 倍率
-MOVE_SPEED=1.0          # 移动速度
-ENTRANCE_EFFECT=True    # 入场效果
-ENTRANCE_DURATION=0.2   # 入场持续时间
-AUDIO_SPEED=1.0         # 音频速度 (效果不好)
 </file>
 
 <file path="pyproject.toml">
 [project]
 name = "TaleStreamAI"
-version = "0.2.0"
-description = "AI-powered novel to video generation pipeline using Edge TTS and Flux"
+version = "1.0.0" # 我们可以自豪地称之为 1.0.0 版本了！
+description = "A modern, asynchronous, pipeline-driven tool to automatically convert novels into videos."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
@@ -3126,18 +2129,11 @@ dependencies = [
     "python-dotenv>=1.0.1",
     "moviepy>=1.0.3",
     "pillow>=11.1.0",
-    "psutil>=7.0.0",
-    "requests>=2.32.3",
-    "tqdm>=4.67.1",
     "edge-tts>=7.0.2",
     "srt>=3.5.3",
     "openai>=1.95.1",
     "aiohttp>=3.10.0",
-    "tiktoken>=0.7.0",
-    "ruff>=0.12.3",
-    "librosa>=0.10.1",
-    "soundfile>=0.12.1",
-    "tenacity>=9.0.0",
+    "tiktoken>=0.7.0"
 ]
 
 [project.optional-dependencies]
@@ -3145,6 +2141,7 @@ dev = [
     "black>=25.1.0",
     "pytest>=8.4.1",
     "pytest-asyncio>=1.0.0",
+    "ruff>=0.12.3" # 将 Ruff 移到开发依赖
 ]
 
 [tool.black]
@@ -3155,8 +2152,6 @@ target-version = ['py312']
 asyncio_mode = "auto"
 testpaths = ["tests"]
 python_files = ["test_*.py"]
-python_classes = ["Test*"]
-python_functions = ["test_*"]
 </file>
 
 </files>

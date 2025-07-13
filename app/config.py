@@ -27,6 +27,7 @@ class LLMConfig:
     api_key: str
     base_url: str
     model: str
+    max_tokens: int
     timeout: int = _get_int_env("LLM_TIMEOUT", 120)
     retry_attempts: int = _get_int_env("LLM_RETRY_ATTEMPTS", 3)
 
@@ -71,6 +72,7 @@ class Settings:
             api_key=os.getenv("STORYBOARD_API_KEY", ""),
             base_url=os.getenv("STORYBOARD_API_URL", ""),
             model=os.getenv("STORYBOARD_MODEL", "gemini-1.5-flash-latest"),
+            max_tokens=_get_int_env("STORYBOARD_MAX_TOKENS", 8000),
         )
     )
     prompt_llm: LLMConfig = field(
@@ -78,6 +80,7 @@ class Settings:
             api_key=os.getenv("PROMPT_API_KEY", ""),
             base_url=os.getenv("PROMPT_API_URL", ""),
             model=os.getenv("PROMPT_MODEL", "deepseek-v2"),
+            max_tokens=_get_int_env("PROMPT_MAX_TOKENS", 8000),  # 也为 prompt_llm 预留
         )
     )
 
