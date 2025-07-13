@@ -46,13 +46,16 @@ class PathConfig:
     cache_dir: Path = data_dir / "cache"
     book_dir: Path = data_dir / "book"
 
-    # 缓存子目录
+    # 缓存子目录 (用于通用、可丢弃的缓存)
     cache_llm: Path = cache_dir / "llm"
     cache_image: Path = cache_dir / "image"
     cache_audio: Path = cache_dir / "audio"
 
     def get_book_path(self, book_id: str) -> Path:
-        return self.book_dir / book_id
+        book_path = self.book_dir / book_id
+        # 在这里动态创建LLM资产目录
+        (book_path / "llm").mkdir(parents=True, exist_ok=True)
+        return book_path
 
     def __post_init__(self):
         """初始化后创建所有必要的目录"""

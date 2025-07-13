@@ -16,12 +16,12 @@ class Shot:
     chapter_index: int
     original_text: str
 
-    # 生成的数据
-    storyboard_prompt_cn: Optional[str] = None
-    storyboard_prompt_en: Optional[str] = None
+    # 生成的数据 (最终使用的提示词)
     image_prompt: Optional[str] = None
 
     # 生成的资产路径
+    storyboard_path: Optional[Path] = None  # 指向分镜脚本JSON文件的路径
+    refined_prompt_path: Optional[Path] = None  # 指向优化后的提示词TXT文件的路径
     image_path: Optional[Path] = None
     audio_path: Optional[Path] = None
     srt_path: Optional[Path] = None

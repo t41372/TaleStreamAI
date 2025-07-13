@@ -3,6 +3,7 @@ import re
 import json
 import asyncio
 from typing import Coroutine, Any
+from pathlib import Path
 
 import tiktoken
 from ..config import settings
@@ -94,99 +95,130 @@ def _split_content_by_tokens(
     return chunks
 
 
-async def _refine_shot_prompt(shot: Shot) -> Shot:
+async def _refine_shot_prompt(shot: Shot, book_path: Path) -> Shot:
     """为单个Shot对象优化生成图像的提示词"""
-    if not shot.storyboard_prompt_en:
-        shot.error = "Missing storyboard_prompt_en for refinement."
+    # 从上一步传递的临时字段中获取英文提示词
+    if not hasattr(shot, 'temp_lens_language_en') or not shot.temp_lens_language_en:
+        shot.error = "Missing English storyboard prompt for refinement."
         logger.warning(
-            f"Skipping prompt refinement for shot {shot.get_full_id()}: No English storyboard prompt."
+            f"Skipping prompt refinement for shot {shot.get_full_id()}: No source prompt."
         )
         return shot
 
-    messages = [{"role": "user", "content": shot.storyboard_prompt_en}]
+    # 1. 构造资产路径
+    refined_prompt_asset_path = book_path / "llm" / f"refined_prompt_{shot.get_full_id()}.txt"
+    shot.refined_prompt_path = refined_prompt_asset_path  # 无论如何都先记录路径
+
+    messages = [{"role": "user", "content": shot.temp_lens_language_en}]
+    
+    # 2. 调用新的 LLM 客户端方法
     refined_prompt = await prompt_client.chat_completion(
-        messages, system=PROMPT_REFINE_SYSTEM_PROMPT
+        messages, system=PROMPT_REFINE_SYSTEM_PROMPT, output_path=refined_prompt_asset_path
     )
 
     if "ERROR" in refined_prompt:
         shot.error = f"Prompt refinement failed: {refined_prompt}"
         logger.error(f"Failed to refine prompt for shot {shot.get_full_id()}: {refined_prompt}")
-        # Fallback: use the original EN prompt and add the global style
-        shot.image_prompt = f"{shot.storyboard_prompt_en}, {settings.image_style_prompt}"
+        shot.image_prompt = f"{shot.temp_lens_language_en}, {settings.image_style_prompt}"
     else:
         shot.image_prompt = f"{refined_prompt}, {settings.image_style_prompt}"
-
+    
+    # 清理临时字段
+    del shot.temp_lens_language_en
+    
     return shot
 
 
 async def _process_single_chunk(
-    chunk: str, chapter_index: int, chunk_index: int, num_chunks: int
+    chunk: str, chapter_index: int, chunk_index: int, num_chunks: int, book_path: Path
 ) -> list[Shot]:
-    """处理单个文本块，生成原始Shots列表。"""
+    """处理单个文本块，生成原始Shots列表，并增加重试逻辑。"""
     logger.info(
         f"Processing chunk {chunk_index + 1}/{num_chunks} for chapter {chapter_index}..."
     )
     messages = [{"role": "user", "content": chunk}]
-    response_json_str = await storyboard_client.chat_completion(
-        messages, system=STORYBOARD_SYSTEM_PROMPT
-    )
+    
+    # 1. 构造资产路径
+    storyboard_asset_path = book_path / "llm" / f"storyboard_ch{chapter_index}_chunk{chunk_index}.json"
 
-    if "ERROR" in response_json_str:
-        logger.error(
-            f"Storyboard generation failed for chunk {chunk_index + 1} of chapter {chapter_index}: {response_json_str}"
+    # 增加重试机制
+    max_retries = 3
+    for attempt in range(max_retries):
+        logger.debug(f"Attempt {attempt + 1}/{max_retries} for chunk {chapter_index}-{chunk_index}")
+
+        # 2. 调用新的 LLM 客户端方法
+        response_json_str = await storyboard_client.chat_completion(
+            messages, system=STORYBOARD_SYSTEM_PROMPT, output_path=storyboard_asset_path
         )
-        return []
 
-    try:
-        # Clean up the JSON string before parsing
-        response_json_str = re.sub(
-            r"```json\s*|\s*```", "", response_json_str
-        ).strip()
-        storyboard_data = json.loads(response_json_str)
-        if not isinstance(storyboard_data, list):
-            # Try to find a list within a dictionary if the LLM wrapped it
-            if isinstance(storyboard_data, dict):
-                found_list = False
-                for key, value in storyboard_data.items():
-                    if isinstance(value, list):
-                        storyboard_data = value
-                        found_list = True
-                        logger.warning(
-                            f"LLM returned a dictionary, but a list was found and extracted from key '{key}'."
-                        )
-                        break
-                if not found_list:
-                    raise json.JSONDecodeError(
-                        "Response is not a list and no list found in dictionary values",
-                        response_json_str,
-                        0,
-                    )
-            else:
-                raise json.JSONDecodeError(
-                    "Response is not a list", response_json_str, 0
-                )
-
-        proto_shots = []
-        for item in storyboard_data:
-            shot = Shot(
-                shot_id=-1,  # Temporary ID, will be re-numbered later
-                chapter_index=chapter_index,
-                original_text=item.get("text", ""),
-                storyboard_prompt_cn=item.get("lensLanguage_cn", ""),
-                storyboard_prompt_en=item.get("lensLanguage_en", ""),
+        if "ERROR" in response_json_str:
+            logger.error(
+                f"Storyboard generation API call failed for chunk {chunk_index + 1} of chapter {chapter_index}: {response_json_str}"
             )
-            proto_shots.append(shot)
-        return proto_shots
+            await asyncio.sleep(2)  # Wait before retrying
+            continue  # Go to next attempt
 
-    except json.JSONDecodeError as e:
-        logger.error(
-            f"JSON parsing failed for chunk {chunk_index + 1} of chapter {chapter_index}: {e}"
-        )
-        logger.debug(f"Problematic JSON string: {response_json_str[:500]}...")
-        return []
+        try:
+            # llm_client现在会返回一个清理过的JSON字符串，无需额外清理
+            storyboard_data = json.loads(response_json_str)
+            
+            # 处理嵌套列表的现有逻辑
+            if not isinstance(storyboard_data, list):
+                if isinstance(storyboard_data, dict):
+                    found_list = False
+                    for key, value in storyboard_data.items():
+                        if isinstance(value, list):
+                            storyboard_data = value
+                            found_list = True
+                            logger.warning(
+                                f"LLM returned a dictionary, but a list was found and extracted from key '{key}'."
+                            )
+                            break
+                    if not found_list:
+                        raise json.JSONDecodeError(
+                            "Response is not a list and no list found in dictionary values",
+                            response_json_str,
+                            0,
+                        )
+                else:
+                    raise json.JSONDecodeError(
+                        "Response is not a list", response_json_str, 0
+                    )
+
+            # 在成功解析后
+            proto_shots = []
+            for item in storyboard_data:
+                shot = Shot(
+                    shot_id=-1,  # Temporary ID, will be re-numbered later
+                    chapter_index=chapter_index,
+                    original_text=item.get("text", ""),
+                    storyboard_path=storyboard_asset_path,
+                )
+                shot.temp_lens_language_en = item.get("lensLanguage_en", "")
+                proto_shots.append(shot)
+            
+            return proto_shots  # Success, exit the retry loop and return the result
+
+        except json.JSONDecodeError as e:
+            logger.error(
+                f"[Attempt {attempt + 1}] JSON parsing failed for chunk {chunk_index + 1}: {e}"
+            )
+            logger.debug(f"Problematic JSON string: {response_json_str[:500]}...")
+            
+            # 删除损坏的缓存文件，以便下次重试时能重新调用API
+            storyboard_asset_path.unlink(missing_ok=True)
+            logger.warning(f"Deleted corrupted asset file: {storyboard_asset_path}")
+            
+            if attempt < max_retries - 1:
+                await asyncio.sleep(2 * (attempt + 1))  # Exponential backoff
+            else:
+                logger.error(f"All {max_retries} retries failed for chunk {chunk_index + 1}. Skipping.")
+                return []  # All retries failed, return empty list
+    
+    return []  # Should not be reached, but as a fallback
 
 
-async def _process_chapter_content(chapter: Chapter) -> list[Shot]:
+async def _process_chapter_content(chapter: Chapter, book_path: Path) -> list[Shot]:
     """处理单个章节的完整内容，并发生成所有Shots并优化提示词。"""
     storyboard_config = settings.storyboard_llm
     content_chunks = _split_content_by_tokens(
@@ -195,8 +227,9 @@ async def _process_chapter_content(chapter: Chapter) -> list[Shot]:
     )
 
     # Step 1: Concurrently create storyboards for all chunks (Scatter)
+    # 传递 book_path
     chunk_processing_tasks = [
-        _process_single_chunk(chunk, chapter.index, i, len(content_chunks))
+        _process_single_chunk(chunk, chapter.index, i, len(content_chunks), book_path)
         for i, chunk in enumerate(content_chunks)
     ]
     results_per_chunk = await asyncio.gather(*chunk_processing_tasks)
@@ -209,25 +242,32 @@ async def _process_chapter_content(chapter: Chapter) -> list[Shot]:
     if not proto_shots:
         return []
 
-    # Step 2: Concurrently refine prompts for all newly generated shots (Scatter)
+    # Step 2: Re-number all shots FIRST to give them unique IDs (MOVED FROM STEP 3)
+    # FIX: This must happen before concurrent refinement to avoid file name conflicts
+    logger.debug(f"Re-numbering {len(proto_shots)} shots for chapter {chapter.index}...")
+    for i, shot in enumerate(proto_shots):
+        shot.shot_id = i + 1
+    # Now all shots have a unique ID (1, 2, 3, ...) instead of -1.
+
+    # Step 3: Concurrently refine prompts for all newly generated shots (Scatter)
     logger.info(f"Refining {len(proto_shots)} prompts for chapter {chapter.index}...")
-    refinement_tasks = [_refine_shot_prompt(s) for s in proto_shots]
+    # Pass the re-numbered proto_shots to the refinement tasks
+    refinement_tasks = [_refine_shot_prompt(s, book_path) for s in proto_shots]
     all_shots = await asyncio.gather(*refinement_tasks)
 
-    # Step 3: Re-number all shots to ensure correct and sequential IDs
-    for i, shot in enumerate(all_shots):
-        shot.shot_id = i + 1
+    # Step 4: Re-numbering is no longer needed here as it was done above.
 
     return all_shots
 
 
-async def create_storyboard_for_chapters(chapters: list[Chapter]) -> list[Shot]:
+async def create_storyboard_for_chapters(chapters: list[Chapter], book_path: Path) -> list[Shot]:
     """
     并发处理所有章节，为它们创建完整的分镜和提示词。
     """
     logger.info(f"Creating storyboards for {len(chapters)} chapters concurrently...")
+    # 传递 book_path
     tasks: list[Coroutine[Any, Any, list[Shot]]] = [
-        _process_chapter_content(chapter) for chapter in chapters
+        _process_chapter_content(chapter, book_path) for chapter in chapters
     ]
 
     results_per_chapter = await asyncio.gather(*tasks)

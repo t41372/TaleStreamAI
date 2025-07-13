@@ -254,6 +254,114 @@ ENTRANCE_DURATION=0.2
 AUDIO_SPEED=1.0
 </file>
 
+<file path=".python-version">
+3.12
+</file>
+
+<file path="app/stages/__init__.py">
+# This file makes the 'stages' directory a Python package.
+</file>
+
+<file path="app/models.py">
+# app/models.py
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Optional
+
+
+@dataclass
+class Shot:
+    """
+    表示一个独立的分镜（或镜头）。
+    这是我们流水线中处理的基本工作单元。
+    """
+
+    # 核心内容
+    shot_id: int
+    chapter_index: int
+    original_text: str
+
+    # 生成的数据 (最终使用的提示词)
+    image_prompt: Optional[str] = None
+
+    # 生成的资产路径
+    storyboard_path: Optional[Path] = None  # 指向分镜脚本JSON文件的路径
+    refined_prompt_path: Optional[Path] = None  # 指向优化后的提示词TXT文件的路径
+    image_path: Optional[Path] = None
+    audio_path: Optional[Path] = None
+    srt_path: Optional[Path] = None
+    video_clip_path: Optional[Path] = None
+
+    # 状态
+    error: Optional[str] = None
+
+    def get_full_id(self) -> str:
+        """返回唯一的镜头ID，格式为 '章节-镜头'"""
+        return f"{self.chapter_index}-{self.shot_id}"
+
+
+@dataclass
+class Chapter:
+    """表示一个完整的章节，包含多个分镜。"""
+
+    index: int
+    content: str
+    shots: list[Shot] = field(default_factory=list)
+</file>
+
+<file path="app/tool.py">
+import re
+
+
+def clean_text(text):
+    """
+    清理文本中的换行符和多余空格
+
+    参数:
+        text (str): 需要清理的文本
+
+    返回:
+        str: 清理后的文本
+    """
+    if not text:
+        return ""
+
+    # 移除换行符
+    text = text.replace("\n", "")
+
+    # 移除多余空格（将多个空格替换为单个空格）
+    text = re.sub(r"\s+", " ", text)
+
+    # 去除首尾空格
+    text = text.strip()
+
+    return text
+
+
+def extract_chapter_id_and_name(title):
+    """
+    从章节标题中提取章节编号和名称
+
+    参数:
+        title (str): 章节完整标题
+
+    返回:
+        tuple: (章节编号, 章节名称)
+    """
+    # 使用正则表达式匹配"第X章"格式
+    match = re.search(r"^(第\d+章)", title)
+
+    if match:
+        # 提取章节编号（包括"章"字）
+        chapter_id = match.group(1)
+        # 章节名称为剩余部分（去除前后空格）
+        chapter_name = title[len(chapter_id) :].strip()
+        return chapter_id, chapter_name
+
+    # 如果没有匹配到标准格式，返回空ID和原标题
+    return "", title
+</file>
+
 <file path=".env.sample">
 # -----------------------------------------------------------------------------
 # 通用设置 (General Settings)
@@ -353,112 +461,398 @@ VIDEO_HEIGHT=1920
 VERBOSE_LOGGING=true
 </file>
 
-<file path=".python-version">
-3.12
-</file>
-
-<file path="app/stages/__init__.py">
-# This file makes the 'stages' directory a Python package.
-</file>
-
-<file path="app/models.py">
-# app/models.py
-from dataclasses import dataclass, field
+<file path="app/stages/content.py">
+# app/stages/content.py
+import asyncio
+import json
+import os
+import re
 from pathlib import Path
 from typing import Optional
 
+import aiohttp
+from bs4 import BeautifulSoup
 
-@dataclass
-class Shot:
+from ..config import settings
+from loguru import logger
+from ..models import Chapter
+
+
+async def _fetch_url(session: aiohttp.ClientSession, url: str) -> Optional[str]:
+    """异步获取URL内容。"""
+    headers = {
+        "Cookie": os.getenv("COOKIE", ""),
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    }
+    try:
+        async with session.get(url, headers=headers, timeout=30) as response:
+            response.raise_for_status()
+            return await response.text()
+    except aiohttp.ClientError as e:
+        logger.error(f"网络请求失败: {url}, 错误: {e}")
+        return None
+
+
+def _parse_chapters_from_html(html_content: str) -> list[dict]:
+    """从目录页HTML中解析章节列表。"""
+    soup = BeautifulSoup(html_content, "html.parser")
+    volume_chapters = soup.find("ul", class_="volume-chapters")
+    if not volume_chapters:
+        return []
+
+    chapters = []
+    for item in volume_chapters.find_all("li", class_="chapter-item"):
+        link = item.find("a", class_="chapter-name")
+        if link and (href := link.get("href")):
+            title = re.sub(r"\\s+", " ", link.get_text(strip=True))
+            # 提取章节ID和名称
+            match = re.search(r"^(第\\d+章)", title)
+            chapter_id = match.group(1) if match else ""
+            chapter_name = title[len(chapter_id) :].strip()
+
+            chapters.append(
+                {
+                    "id": chapter_id,
+                    "name": chapter_name or title,
+                    "url": "https:" + href if href.startswith("//") else href,
+                }
+            )
+    return chapters
+
+
+async def _get_remote_chapters(book_id: str, book_path: Path) -> list[Chapter]:
+    """从网络获取小说内容。"""
+    catalog_url = f"https://www.qidian.com/book/{book_id}/"
+    chapters_json_path = book_path / f"{book_id}.json"
+    chapters_list_dir = book_path / "list"
+    chapters_list_dir.mkdir(exist_ok=True)
+
+    async with aiohttp.ClientSession() as session:
+        catalog_html = await _fetch_url(session, catalog_url)
+        if not catalog_html:
+            return []
+
+        chapter_infos = _parse_chapters_from_html(catalog_html)
+        with open(chapters_json_path, "w", encoding="utf-8") as f:
+            json.dump(chapter_infos, f, ensure_ascii=False, indent=2)
+
+        tasks = []
+        for i, info in enumerate(chapter_infos):
+            chapter_file = chapters_list_dir / f"{i}.txt"
+            if not chapter_file.exists():
+                tasks.append(
+                    _fetch_and_save_chapter(session, info["url"], chapter_file)
+                )
+
+        results = await asyncio.gather(*tasks)
+
+        chapters = []
+        for i, content in enumerate(results):
+            if content:
+                chapters.append(Chapter(index=i, content=content))
+
+    return chapters
+
+
+async def _fetch_and_save_chapter(session: aiohttp.ClientSession, url: str, path: Path):
+    """获取单个章节内容并保存。"""
+    html = await _fetch_url(session, url)
+    if not html:
+        return None
+
+    soup = BeautifulSoup(html, "html.parser")
+    main_content = soup.find("div", class_="read-content")
+    if not main_content:
+        return None
+
+    paragraphs = [p.get_text(strip=True) for p in main_content.find_all("p")]
+    content = "\n".join(filter(None, paragraphs))
+
+    path.write_text(content, encoding="utf-8")
+    return content
+
+
+def _get_local_chapters(source_file: str, book_path: Path) -> list[Chapter]:
+    """从本地TXT文件加载章节。"""
+    source_path = Path(source_file)
+    if not source_path.exists():
+        logger.error(f"本地文件不存在: {source_file}")
+        return []
+
+    chapters_list_dir = book_path / "list"
+    chapters_list_dir.mkdir(exist_ok=True)
+
+    content = source_path.read_text(encoding="utf-8")
+    # 按 "第X章" 分割，保留分隔符
+    raw_chunks = re.split(r"(第\\d+章.*)", content)
+
+    chapters = []
+    chapter_index = 0
+
+    # 第一个块是标题前的任何内容，通常忽略
+    # 从索引1开始，步长为2，来获取 (标题, 内容) 对
+    for i in range(1, len(raw_chunks), 2):
+        # title = raw_chunks[i].strip()
+        text = raw_chunks[i + 1].strip()
+        if text:
+            chapter = Chapter(index=chapter_index, content=text)
+            chapters.append(chapter)
+            # 将分割好的章节内容写入文件，以便后续步骤可以统一处理
+            (chapters_list_dir / f"{chapter_index}.txt").write_text(
+                text, encoding="utf-8"
+            )
+            chapter_index += 1
+
+    if not chapters:  # 如果没有匹配到 "第X章"，则将整个文件视为一章
+        logger.warning("未在文件中找到 '第X章' 格式的章节标题，将整个文件视为一个章节。")
+        chapter = Chapter(index=0, content=content)
+        chapters.append(chapter)
+        (chapters_list_dir / "0.txt").write_text(content, encoding="utf-8")
+
+    return chapters
+
+
+async def get_chapters(
+    book_id: str, source_file: Optional[str] = None
+) -> list[Chapter]:
     """
-    表示一个独立的分镜（或镜头）。
-    这是我们流水线中处理的基本工作单元。
+    内容获取阶段的主函数。
+    根据输入源（网络或本地）获取所有章节内容。
     """
+    book_path = settings.paths.get_book_path(book_id)
+    book_path.mkdir(exist_ok=True)
 
-    # 核心内容
-    shot_id: int
-    chapter_index: int
-    original_text: str
-
-    # 生成的数据
-    storyboard_prompt_cn: Optional[str] = None
-    storyboard_prompt_en: Optional[str] = None
-    image_prompt: Optional[str] = None
-
-    # 生成的资产路径
-    image_path: Optional[Path] = None
-    audio_path: Optional[Path] = None
-    srt_path: Optional[Path] = None
-    video_clip_path: Optional[Path] = None
-
-    # 状态
-    error: Optional[str] = None
-
-    def get_full_id(self) -> str:
-        """返回唯一的镜头ID，格式为 '章节-镜头'"""
-        return f"{self.chapter_index}-{self.shot_id}"
-
-
-@dataclass
-class Chapter:
-    """表示一个完整的章节，包含多个分镜。"""
-
-    index: int
-    content: str
-    shots: list[Shot] = field(default_factory=list)
+    if source_file:
+        logger.info(f"从本地文件加载: {source_file}")
+        return _get_local_chapters(source_file, book_path)
+    else:
+        logger.info(f"从网络获取书籍ID: {book_id}")
+        return await _get_remote_chapters(book_id, book_path)
 </file>
 
-<file path="app/tool.py">
-import re
+<file path="app/ffmpeg_utils.py">
+# app/ffmpeg_utils.py
+import subprocess
+import platform
+import functools
+from loguru import logger
 
 
-def clean_text(text):
+@functools.lru_cache(maxsize=1)
+def get_ffmpeg_gpu_params():
     """
-    清理文本中的换行符和多余空格
+    自动检测并返回适用于当前系统的 FFmpeg GPU 加速参数。
+    使用 lru_cache 缓存结果，避免重复检测。
 
-    参数:
-        text (str): 需要清理的文本
-
-    返回:
-        str: 清理后的文本
+    Returns:
+        dict: 包含 pre_input 和 output_params 的字典。
     """
-    if not text:
-        return ""
+    system = platform.system()
+    logger.info(f"检测操作系统: {system}")
 
-    # 移除换行符
-    text = text.replace("\n", "")
+    # 检查 ffmpeg 是否存在
+    try:
+        subprocess.run(
+            ["ffmpeg", "-version"], capture_output=True, check=True, text=True
+        )
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        logger.warning("系统中未找到 ffmpeg 或无法执行。将使用纯 CPU 编码。")
+        return {
+            "pre_input": [],
+            "output_params": {"codec": "libx264"},
+            "extra_params": [],
+        }
 
-    # 移除多余空格（将多个空格替换为单个空格）
-    text = re.sub(r"\s+", " ", text)
+    # NVIDIA (Windows/Linux)
+    if system in ["Windows", "Linux"]:
+        try:
+            result = subprocess.run(
+                ["ffmpeg", "-hwaccels"], capture_output=True, text=True
+            )
+            if "cuda" in result.stdout:
+                logger.info("✅ 检测到 NVIDIA CUDA 支持。")
+                # 检查 h264_nvenc 编码器
+                result = subprocess.run(
+                    ["ffmpeg", "-encoders"], capture_output=True, text=True
+                )
+                if "h264_nvenc" in result.stdout:
+                    logger.info("✅ 检测到 h264_nvenc 编码器。启用 NVIDIA GPU 加速。")
+                    return {
+                        "pre_input": ["-hwaccel", "cuda"],
+                        "output_params": {"codec": "h264_nvenc", "preset": "fast"},
+                        "extra_params": [],  # NVIDIA编码器不需要额外参数
+                    }
+        except (FileNotFoundError, subprocess.CalledProcessError):
+            pass  # ffmpeg 未找到或执行失败，继续尝试其他选项
 
-    # 去除首尾空格
-    text = text.strip()
+    # Apple Silicon / Intel (macOS)
+    if system == "Darwin":
+        try:
+            result = subprocess.run(
+                ["ffmpeg", "-hwaccels"], capture_output=True, text=True
+            )
+            if "videotoolbox" in result.stdout:
+                logger.info("✅ 检测到 Apple VideoToolbox 支持。")
+                # 检查 h264_videotoolbox 编码器
+                result = subprocess.run(
+                    ["ffmpeg", "-encoders"], capture_output=True, text=True
+                )
+                if "h264_videotoolbox" in result.stdout:
+                    logger.info(
+                        "✅ 检测到 h264_videotoolbox 编码器。启用 macOS GPU 加速。"
+                    )
+                    return {
+                        "pre_input": ["-hwaccel", "videotoolbox"],
+                        "output_params": {"codec": "h264_videotoolbox"},
+                        "extra_params": [
+                            "-b:v",
+                            "8000k",
+                        ],  # 比特率参数通过ffmpeg_params传递
+                    }
+        except (FileNotFoundError, subprocess.CalledProcessError):
+            pass
 
-    return text
+    # Intel Quick Sync Video (Windows/Linux)
+    if system in ["Windows", "Linux"]:
+        try:
+            result = subprocess.run(
+                ["ffmpeg", "-hwaccels"], capture_output=True, text=True
+            )
+            if "qsv" in result.stdout:
+                logger.info("✅ 检测到 Intel QSV 支持。")
+                result = subprocess.run(
+                    ["ffmpeg", "-encoders"], capture_output=True, text=True
+                )
+                if "h264_qsv" in result.stdout:
+                    logger.info("✅ 检测到 h264_qsv 编码器。启用 Intel QSV 加速。")
+                    return {
+                        "pre_input": ["-hwaccel", "qsv"],
+                        "output_params": {"codec": "h264_qsv", "preset": "fast"},
+                        "extra_params": [],  # Intel QSV不需要额外参数
+                    }
+        except (FileNotFoundError, subprocess.CalledProcessError):
+            pass
+
+    logger.warning("⚠️ 未检测到可用的 GPU 加速硬件。将回退到 CPU (libx264) 进行编码。")
+    return {"pre_input": [], "output_params": {"codec": "libx264"}, "extra_params": []}
+</file>
+
+<file path="app/pipeline.py">
+# app/pipeline.py
+import asyncio
+import concurrent.futures
+import pickle
+from typing import Optional
+
+from .config import settings
+from .stages import content, storyboard, assets, finalizer
+from loguru import logger
 
 
-def extract_chapter_id_and_name(title):
+class Pipeline:
     """
-    从章节标题中提取章节编号和名称
-
-    参数:
-        title (str): 章节完整标题
-
-    返回:
-        tuple: (章节编号, 章节名称)
+    异步流水线控制器，负责编排整个视频生成过程。
     """
-    # 使用正则表达式匹配"第X章"格式
-    match = re.search(r"^(第\d+章)", title)
 
-    if match:
-        # 提取章节编号（包括"章"字）
-        chapter_id = match.group(1)
-        # 章节名称为剩余部分（去除前后空格）
-        chapter_name = title[len(chapter_id) :].strip()
-        return chapter_id, chapter_name
+    def __init__(self, book_id: str, source_file: Optional[str] = None):
+        self.book_id = book_id
+        self.source_file = source_file
+        self.book_path = settings.paths.get_book_path(book_id)
+        self.state_file_path = self.book_path / "progress.pkl"
 
-    # 如果没有匹配到标准格式，返回空ID和原标题
-    return "", title
+        # 为CPU密集型任务创建一个进程池执行器
+        self.process_executor = concurrent.futures.ProcessPoolExecutor()
+
+    def _save_state(self, shots: list):
+        """将当前的所有Shots状态序列化到文件。"""
+        try:
+            with open(self.state_file_path, "wb") as f:
+                pickle.dump(shots, f)
+            logger.info(f"💾 流水线状态已保存至: {self.state_file_path}")
+        except Exception as e:
+            logger.error(f"保存状态失败: {e}")
+
+    def _load_state(self) -> Optional[list]:
+        """从文件加载并反序列化Shots状态。"""
+        if not self.state_file_path.exists():
+            return None
+        try:
+            with open(self.state_file_path, "rb") as f:
+                shots = pickle.load(f)
+            logger.info(f"✅ 成功从 {self.state_file_path} 加载状态，即将恢复运行...")
+            return shots
+        except (pickle.UnpicklingError, EOFError, FileNotFoundError) as e:
+            logger.warning(f"无法加载状态文件 (可能已损坏或为空)，将重新开始: {e}")
+            self.state_file_path.unlink(missing_ok=True) # 删除损坏的文件
+            return None
+            
+    def _cleanup_state_file(self):
+        """在流水线成功完成后清理状态文件。"""
+        self.state_file_path.unlink(missing_ok=True)
+        logger.info("🧹 状态文件已清理。")
+
+    async def run(self):
+        """按顺序执行流水线的各个阶段"""
+        start_time = asyncio.get_event_loop().time()
+
+        # --- 尝试加载状态，实现断点续传 ---
+        processed_shots = self._load_state()
+
+        if processed_shots is None:
+            logger.info("🔄 未找到有效状态文件，开始全新运行...")
+            # --- 阶段 1: 内容获取 ---
+            logger.info("🚀 开始执行: 阶段 1: 内容获取")
+            chapters = await content.get_chapters(self.book_id, self.source_file)
+            if not chapters:
+                logger.error("内容获取失败，流水线终止。")
+                return
+            logger.info(f"✅ 完成: 阶段 1: 内容获取 | 获取到 {len(chapters)} 个章节")
+    
+            # --- 阶段 2: 分镜与提示词生成 (并发) ---
+            logger.info("🚀 开始执行: 阶段 2: 生成分镜与提示词")
+            all_shots = await storyboard.create_storyboard_for_chapters(chapters, self.book_path)
+            if not all_shots:
+                logger.error("分镜生成失败，流水线终止。")
+                return
+            logger.info(
+                f"✅ 完成: 阶段 2: 生成分镜与提示词 | 共生成 {len(all_shots)} 个分镜"
+            )
+            
+            # 第一个检查点：在LLM密集型任务后保存状态
+            self._save_state(all_shots)
+            processed_shots = all_shots
+        else:
+            logger.info(f"✅ 成功恢复运行，已加载 {len(processed_shots)} 个镜头的先前状态。")
+
+        # --- 阶段 3: 资产生成 (图片、音频、视频片段) ---
+        logger.info("🚀 开始执行: 阶段 3: 并行生成所有资产")
+        # 传递已处理或已加载的shots
+        shots_after_assets = await assets.generate_all_assets(
+            processed_shots, self.book_path, self.process_executor
+        )
+        # 第二个检查点：在媒体资产生成后更新状态
+        self._save_state(shots_after_assets)
+        
+        successful_shots = [shot for shot in shots_after_assets if not shot.error]
+        if not successful_shots:
+            logger.error("所有资产生成失败，流水线终止。")
+            return
+        logger.info(
+            f"✅ 完成: 阶段 3: 并行生成所有资产 | 成功处理 {len(successful_shots)}/{len(shots_after_assets)} 个镜头"
+        )
+
+        # --- 阶段 4: 最终合成 ---
+        logger.info("🚀 开始执行: 阶段 4: 合成最终视频")
+        await finalizer.merge_video_clips(self.book_id, successful_shots)
+        logger.info("✅ 完成: 阶段 4: 合成最终视频")
+
+        end_time = asyncio.get_event_loop().time()
+        logger.info(f"流水线总耗时: {end_time - start_time:.2f} 秒")
+
+        # --- 清理 ---
+        self._cleanup_state_file()
+        # 优雅地关闭进程池
+        self.process_executor.shutdown()
 </file>
 
 <file path=".gitignore">
@@ -478,6 +872,100 @@ data
 .env
 
 prompt_history
+</file>
+
+<file path="run.py">
+# run.py
+import asyncio
+import argparse
+from pathlib import Path
+import os
+import sys
+
+from loguru import logger
+
+from app.config import settings
+from app.llm_client import test_llm_connections
+from app.pipeline import Pipeline
+
+
+async def main():
+    """主异步函数，协调整个工作流"""
+    # --- Loguru Configuration ---
+    logger.remove()
+    log_level = "DEBUG" if os.getenv("VERBOSE_LOGGING", "true").lower() == "true" else "INFO"
+    logger.add(
+        sys.stderr,
+        level=log_level,
+        format=(
+            "<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> | "
+            "<level>{level: <8}</level> | "
+            "<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>"
+        ),
+        colorize=True,
+    )
+    # --- End Loguru Configuration ---
+
+    parser = argparse.ArgumentParser(
+        description="TaleStreamAI - 自动化小说转视频工作流"
+    )
+    parser.add_argument(
+        "source",
+        nargs="?",
+        default=settings.book_source,
+        help=f"书籍来源：可以是起点ID或本地.txt文件路径 (默认为: {settings.book_source})",
+    )
+    parser.add_argument(
+        "--book_id",
+        default=settings.custom_book_id,
+        help="为本地文件指定一个自定义的书籍ID (默认为文件名)",
+    )
+    parser.add_argument(
+        "--test-connections",
+        action="store_true",
+        help="仅运行API连接测试后退出",
+    )
+
+    args = parser.parse_args()
+
+    if args.test_connections:
+        await test_llm_connections()
+        return
+
+    # 更新配置以反映命令行参数
+    # (dataclasses 是不可变的, 所以我们创建一个新的)
+    # 技巧：使用 object.__setattr__ 来绕过 frozen=True 的限制进行修改
+    # 但更清晰的方式是在启动时就决定好配置
+    # 这里为了简单，我们假设 settings 已通过 .env 文件配置好，命令行仅用于临时覆盖
+    # 实际生产中可能会用更复杂的配置加载逻辑
+
+    # 使用命令行参数来确定 book_id
+    final_book_id = args.book_id
+    if not final_book_id:
+        if args.source.endswith(".txt"):
+            final_book_id = Path(args.source).stem
+        else:
+            final_book_id = args.source
+
+    logger.info(f"🚀 工作流启动，书籍ID: {final_book_id}")
+
+    # 初始化并运行流水线
+    pipeline = Pipeline(
+        book_id=final_book_id,
+        source_file=args.source if args.source.endswith(".txt") else None,
+    )
+
+    try:
+        await pipeline.run()
+    except Exception as e:
+        logger.exception(f"工作流执行过程中发生未捕获的严重错误: {e}")
+    else:
+        # This 'else' block only runs if the 'try' block completes without any exceptions
+        logger.info("🎉 工作流全部阶段成功完成！")
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
 </file>
 
 <file path="app/stages/assets.py">
@@ -674,175 +1162,6 @@ async def generate_all_assets(
     return list(processed_shots)
 </file>
 
-<file path="app/stages/content.py">
-# app/stages/content.py
-import asyncio
-import json
-import os
-import re
-from pathlib import Path
-from typing import Optional
-
-import aiohttp
-from bs4 import BeautifulSoup
-
-from ..config import settings
-from loguru import logger
-from ..models import Chapter
-
-
-async def _fetch_url(session: aiohttp.ClientSession, url: str) -> Optional[str]:
-    """异步获取URL内容。"""
-    headers = {
-        "Cookie": os.getenv("COOKIE", ""),
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    }
-    try:
-        async with session.get(url, headers=headers, timeout=30) as response:
-            response.raise_for_status()
-            return await response.text()
-    except aiohttp.ClientError as e:
-        logger.error(f"网络请求失败: {url}, 错误: {e}")
-        return None
-
-
-def _parse_chapters_from_html(html_content: str) -> list[dict]:
-    """从目录页HTML中解析章节列表。"""
-    soup = BeautifulSoup(html_content, "html.parser")
-    volume_chapters = soup.find("ul", class_="volume-chapters")
-    if not volume_chapters:
-        return []
-
-    chapters = []
-    for item in volume_chapters.find_all("li", class_="chapter-item"):
-        link = item.find("a", class_="chapter-name")
-        if link and (href := link.get("href")):
-            title = re.sub(r"\\s+", " ", link.get_text(strip=True))
-            # 提取章节ID和名称
-            match = re.search(r"^(第\\d+章)", title)
-            chapter_id = match.group(1) if match else ""
-            chapter_name = title[len(chapter_id) :].strip()
-
-            chapters.append(
-                {
-                    "id": chapter_id,
-                    "name": chapter_name or title,
-                    "url": "https:" + href if href.startswith("//") else href,
-                }
-            )
-    return chapters
-
-
-async def _get_remote_chapters(book_id: str, book_path: Path) -> list[Chapter]:
-    """从网络获取小说内容。"""
-    catalog_url = f"https://www.qidian.com/book/{book_id}/"
-    chapters_json_path = book_path / f"{book_id}.json"
-    chapters_list_dir = book_path / "list"
-    chapters_list_dir.mkdir(exist_ok=True)
-
-    async with aiohttp.ClientSession() as session:
-        catalog_html = await _fetch_url(session, catalog_url)
-        if not catalog_html:
-            return []
-
-        chapter_infos = _parse_chapters_from_html(catalog_html)
-        with open(chapters_json_path, "w", encoding="utf-8") as f:
-            json.dump(chapter_infos, f, ensure_ascii=False, indent=2)
-
-        tasks = []
-        for i, info in enumerate(chapter_infos):
-            chapter_file = chapters_list_dir / f"{i}.txt"
-            if not chapter_file.exists():
-                tasks.append(
-                    _fetch_and_save_chapter(session, info["url"], chapter_file)
-                )
-
-        results = await asyncio.gather(*tasks)
-
-        chapters = []
-        for i, content in enumerate(results):
-            if content:
-                chapters.append(Chapter(index=i, content=content))
-
-    return chapters
-
-
-async def _fetch_and_save_chapter(session: aiohttp.ClientSession, url: str, path: Path):
-    """获取单个章节内容并保存。"""
-    html = await _fetch_url(session, url)
-    if not html:
-        return None
-
-    soup = BeautifulSoup(html, "html.parser")
-    main_content = soup.find("div", class_="read-content")
-    if not main_content:
-        return None
-
-    paragraphs = [p.get_text(strip=True) for p in main_content.find_all("p")]
-    content = "\n".join(filter(None, paragraphs))
-
-    path.write_text(content, encoding="utf-8")
-    return content
-
-
-def _get_local_chapters(source_file: str, book_path: Path) -> list[Chapter]:
-    """从本地TXT文件加载章节。"""
-    source_path = Path(source_file)
-    if not source_path.exists():
-        logger.error(f"本地文件不存在: {source_file}")
-        return []
-
-    chapters_list_dir = book_path / "list"
-    chapters_list_dir.mkdir(exist_ok=True)
-
-    content = source_path.read_text(encoding="utf-8")
-    # 按 "第X章" 分割，保留分隔符
-    raw_chunks = re.split(r"(第\\d+章.*)", content)
-
-    chapters = []
-    chapter_index = 0
-
-    # 第一个块是标题前的任何内容，通常忽略
-    # 从索引1开始，步长为2，来获取 (标题, 内容) 对
-    for i in range(1, len(raw_chunks), 2):
-        # title = raw_chunks[i].strip()
-        text = raw_chunks[i + 1].strip()
-        if text:
-            chapter = Chapter(index=chapter_index, content=text)
-            chapters.append(chapter)
-            # 将分割好的章节内容写入文件，以便后续步骤可以统一处理
-            (chapters_list_dir / f"{chapter_index}.txt").write_text(
-                text, encoding="utf-8"
-            )
-            chapter_index += 1
-
-    if not chapters:  # 如果没有匹配到 "第X章"，则将整个文件视为一章
-        logger.warning("未在文件中找到 '第X章' 格式的章节标题，将整个文件视为一个章节。")
-        chapter = Chapter(index=0, content=content)
-        chapters.append(chapter)
-        (chapters_list_dir / "0.txt").write_text(content, encoding="utf-8")
-
-    return chapters
-
-
-async def get_chapters(
-    book_id: str, source_file: Optional[str] = None
-) -> list[Chapter]:
-    """
-    内容获取阶段的主函数。
-    根据输入源（网络或本地）获取所有章节内容。
-    """
-    book_path = settings.paths.get_book_path(book_id)
-    book_path.mkdir(exist_ok=True)
-
-    if source_file:
-        logger.info(f"从本地文件加载: {source_file}")
-        return _get_local_chapters(source_file, book_path)
-    else:
-        logger.info(f"从网络获取书籍ID: {book_id}")
-        return await _get_remote_chapters(book_id, book_path)
-</file>
-
 <file path="app/stages/finalizer.py">
 # app/stages/finalizer.py
 import asyncio
@@ -942,7 +1261,7 @@ async def merge_video_clips(book_id: str, shots: list[Shot]):
             # ffmpeg concat demuxer 需要对特殊字符进行转义
             # 但更安全的方式是使用相对路径并在安全的工作目录中运行
             safe_path = clip_path.resolve().as_posix()
-            f.write(f"file '{safe_path}'\\n")
+            f.write(f"file '{safe_path}'\n")
 
     # 合并字幕
     await _merge_srt_files(sorted_shots, final_srt_path)
@@ -978,6 +1297,292 @@ async def merge_video_clips(book_id: str, shots: list[Shot]):
 
     # 清理临时的 concat 文件
     concat_list_path.unlink(missing_ok=True)
+</file>
+
+<file path="app/stages/storyboard.py">
+# app/stages/storyboard.py
+import re
+import json
+import asyncio
+from typing import Coroutine, Any
+from pathlib import Path
+
+import tiktoken
+from ..config import settings
+from ..llm_client import storyboard_client, prompt_client
+from loguru import logger
+from ..models import Chapter, Shot
+
+# --- Prompts ---
+STORYBOARD_SYSTEM_PROMPT = """
+你是一个资深的剧本编辑。你的任务是根据我输入的小说内容，生成详细的分镜脚本。
+请遵循以下规则：
+1.  **高密度分镜**: 为每2到4句话（特别是对话或关键动作描述）创建一个独立的分镜。确保充分捕捉场景的动态变化和人物的情感交流。不要遗漏任何情节。
+2.  **完整内容**: `text` 字段必须包含原始的小说文本，不要进行任何形式的概括或提炼。
+3.  **镜头语言**: `lensLanguage_cn` 和 `lensLanguage_en` 需要详细描述镜头，包含以下元素：
+    -   **角色**: 年龄、性别、外观、角色类型（如：年轻男子, 憔悴的拳手）。不要使用人名。
+    -   **动作**: 角色的具体动作或表情（如：揪住衣领, 疲惫地喘气, 愤怒地呐喊）。
+    -   **场景**: 故事发生的地点或背景（如：昏暗的地下拳台角落, 明亮的医院病房）。
+    -   **情绪**: 场景的氛围或角色的情感基调（如：紧张, 绝望, 痛苦, 狂喜）。
+    -   **风格**: 图像的艺术风格，固定为 **动漫风格, 细节丰富, 插画感**。
+    -   **镜头角度**: 摄像机的视角或构图（如：特写, 中景, 过肩镜头, 俯视）。
+    -   **灯光与环境**: 光线条件或环境氛围（如：刺眼的顶光, 窗外的月光, 闪烁的灯光）。
+4.  **镜头语言格式**: 必须是逗号分隔的关键词组合，例如：`年轻男子, 揪着李哥的领子, 拳台角落, 绝望, 动漫风格, 特写, 顶光`。
+
+请严格按照以下JSON格式返回，不要添加任何其他文字或解释，只返回有效的JSON数组：
+[
+    {
+        "id": "1",
+        "text": "鼻骨断了？我一下揪住了蚊子的衣服，说：「我还要打！你想办法！」",
+        "lensLanguage_cn": "年轻拳手, 揪住衣服, 拳台, 愤怒、急切, 动漫风格, 插画感, 中景, 强光",
+        "lensLanguage_en": "young boxer, grabbing clothes, boxing ring, angry, urgent, anime style, detailed, illustration, medium shot, strong light"
+    }
+]
+"""
+
+PROMPT_REFINE_SYSTEM_PROMPT = """
+你是一位专业的AI绘画提示词工程师。你的任务是基于给定的场景描述，生成一段高质量、细节丰富的英文提示词，用于动漫风格的图像生成。
+请遵循以下规则：
+1.  **核心要素**: 提示词必须以 `masterpiece, best quality, highres` 开头。
+2.  **风格统一**: 必须包含 `anime style, detailed illustration, vibrant colors` 来确保画风一致。
+3.  **细节丰富**: 将中文描述（角色、动作、场景、情绪、灯光）转化为具体、生动的英文关键词。使用括号 `()` 来强调重要元素，例如 `(red eyes:1.2)`。
+4.  **格式**: 所有关键词用逗号 `,` 分隔。
+5.  **简洁**: 不要添加任何解释或无关的文字，直接输出提示词。
+
+例如，如果输入是 "年轻男子, 愤怒地呐喊, 雨中的街道, 绝望, 霓虹灯光, 特写"，一个好的输出是：
+masterpiece, best quality, highres, anime style, detailed illustration, vibrant colors, 1boy, young man, (screaming in anger:1.3), close-up shot, rain, wet clothes, desperate expression, neon lights reflection, dramatic lighting
+"""
+
+
+def _split_content_by_tokens(
+    content: str, max_tokens: int, tokenzer_model_name: str = "gpt-4o"
+) -> list[str]:
+    """按token数量将文本分割成块。"""
+    logger.debug(f"Splitting content by tokens, max_tokens={max_tokens}")
+    try:
+        encoding = tiktoken.encoding_for_model(tokenzer_model_name)
+    except KeyError:
+        logger.warning(f"Model '{tokenzer_model_name}' not found for tiktoken, using 'cl100k_base'.")
+        encoding = tiktoken.get_encoding("cl100k_base")
+
+    paragraphs = content.split("\n")
+    chunks, current_chunk_paragraphs, current_chunk_tokens = [], [], 0
+
+    for p in paragraphs:
+        if not p.strip():
+            continue
+        p_tokens = len(encoding.encode(p))
+
+        if p_tokens > max_tokens:
+            logger.warning(
+                f"Paragraph with {p_tokens} tokens exceeds max_tokens {max_tokens}, force splitting."
+            )
+            encoded_p = encoding.encode(p)
+            for i in range(0, len(encoded_p), max_tokens):
+                chunks.append(encoding.decode(encoded_p[i : i + max_tokens]))
+            continue
+
+        if current_chunk_tokens + p_tokens > max_tokens:
+            chunks.append("\n".join(current_chunk_paragraphs))
+            current_chunk_paragraphs = [p]
+            current_chunk_tokens = p_tokens
+        else:
+            current_chunk_paragraphs.append(p)
+            current_chunk_tokens += p_tokens
+
+    if current_chunk_paragraphs:
+        chunks.append("\n".join(current_chunk_paragraphs))
+
+    logger.info(f"Content split into {len(chunks)} chunks.")
+    return chunks
+
+
+async def _refine_shot_prompt(shot: Shot, book_path: Path) -> Shot:
+    """为单个Shot对象优化生成图像的提示词"""
+    # 从上一步传递的临时字段中获取英文提示词
+    if not hasattr(shot, 'temp_lens_language_en') or not shot.temp_lens_language_en:
+        shot.error = "Missing English storyboard prompt for refinement."
+        logger.warning(
+            f"Skipping prompt refinement for shot {shot.get_full_id()}: No source prompt."
+        )
+        return shot
+
+    # 1. 构造资产路径
+    refined_prompt_asset_path = book_path / "llm" / f"refined_prompt_{shot.get_full_id()}.txt"
+    shot.refined_prompt_path = refined_prompt_asset_path  # 无论如何都先记录路径
+
+    messages = [{"role": "user", "content": shot.temp_lens_language_en}]
+    
+    # 2. 调用新的 LLM 客户端方法
+    refined_prompt = await prompt_client.chat_completion(
+        messages, system=PROMPT_REFINE_SYSTEM_PROMPT, output_path=refined_prompt_asset_path
+    )
+
+    if "ERROR" in refined_prompt:
+        shot.error = f"Prompt refinement failed: {refined_prompt}"
+        logger.error(f"Failed to refine prompt for shot {shot.get_full_id()}: {refined_prompt}")
+        shot.image_prompt = f"{shot.temp_lens_language_en}, {settings.image_style_prompt}"
+    else:
+        shot.image_prompt = f"{refined_prompt}, {settings.image_style_prompt}"
+    
+    # 清理临时字段
+    del shot.temp_lens_language_en
+    
+    return shot
+
+
+async def _process_single_chunk(
+    chunk: str, chapter_index: int, chunk_index: int, num_chunks: int, book_path: Path
+) -> list[Shot]:
+    """处理单个文本块，生成原始Shots列表，并增加重试逻辑。"""
+    logger.info(
+        f"Processing chunk {chunk_index + 1}/{num_chunks} for chapter {chapter_index}..."
+    )
+    messages = [{"role": "user", "content": chunk}]
+    
+    # 1. 构造资产路径
+    storyboard_asset_path = book_path / "llm" / f"storyboard_ch{chapter_index}_chunk{chunk_index}.json"
+
+    # 增加重试机制
+    max_retries = 3
+    for attempt in range(max_retries):
+        logger.debug(f"Attempt {attempt + 1}/{max_retries} for chunk {chapter_index}-{chunk_index}")
+
+        # 2. 调用新的 LLM 客户端方法
+        response_json_str = await storyboard_client.chat_completion(
+            messages, system=STORYBOARD_SYSTEM_PROMPT, output_path=storyboard_asset_path
+        )
+
+        if "ERROR" in response_json_str:
+            logger.error(
+                f"Storyboard generation API call failed for chunk {chunk_index + 1} of chapter {chapter_index}: {response_json_str}"
+            )
+            await asyncio.sleep(2)  # Wait before retrying
+            continue  # Go to next attempt
+
+        try:
+            # llm_client现在会返回一个清理过的JSON字符串，无需额外清理
+            storyboard_data = json.loads(response_json_str)
+            
+            # 处理嵌套列表的现有逻辑
+            if not isinstance(storyboard_data, list):
+                if isinstance(storyboard_data, dict):
+                    found_list = False
+                    for key, value in storyboard_data.items():
+                        if isinstance(value, list):
+                            storyboard_data = value
+                            found_list = True
+                            logger.warning(
+                                f"LLM returned a dictionary, but a list was found and extracted from key '{key}'."
+                            )
+                            break
+                    if not found_list:
+                        raise json.JSONDecodeError(
+                            "Response is not a list and no list found in dictionary values",
+                            response_json_str,
+                            0,
+                        )
+                else:
+                    raise json.JSONDecodeError(
+                        "Response is not a list", response_json_str, 0
+                    )
+
+            # 在成功解析后
+            proto_shots = []
+            for item in storyboard_data:
+                shot = Shot(
+                    shot_id=-1,  # Temporary ID, will be re-numbered later
+                    chapter_index=chapter_index,
+                    original_text=item.get("text", ""),
+                    storyboard_path=storyboard_asset_path,
+                )
+                shot.temp_lens_language_en = item.get("lensLanguage_en", "")
+                proto_shots.append(shot)
+            
+            return proto_shots  # Success, exit the retry loop and return the result
+
+        except json.JSONDecodeError as e:
+            logger.error(
+                f"[Attempt {attempt + 1}] JSON parsing failed for chunk {chunk_index + 1}: {e}"
+            )
+            logger.debug(f"Problematic JSON string: {response_json_str[:500]}...")
+            
+            # 删除损坏的缓存文件，以便下次重试时能重新调用API
+            storyboard_asset_path.unlink(missing_ok=True)
+            logger.warning(f"Deleted corrupted asset file: {storyboard_asset_path}")
+            
+            if attempt < max_retries - 1:
+                await asyncio.sleep(2 * (attempt + 1))  # Exponential backoff
+            else:
+                logger.error(f"All {max_retries} retries failed for chunk {chunk_index + 1}. Skipping.")
+                return []  # All retries failed, return empty list
+    
+    return []  # Should not be reached, but as a fallback
+
+
+async def _process_chapter_content(chapter: Chapter, book_path: Path) -> list[Shot]:
+    """处理单个章节的完整内容，并发生成所有Shots并优化提示词。"""
+    storyboard_config = settings.storyboard_llm
+    content_chunks = _split_content_by_tokens(
+        chapter.content,
+        max_tokens=storyboard_config.max_tokens,
+    )
+
+    # Step 1: Concurrently create storyboards for all chunks (Scatter)
+    # 传递 book_path
+    chunk_processing_tasks = [
+        _process_single_chunk(chunk, chapter.index, i, len(content_chunks), book_path)
+        for i, chunk in enumerate(content_chunks)
+    ]
+    results_per_chunk = await asyncio.gather(*chunk_processing_tasks)
+
+    # Flatten the results from all chunks into a single list of shots
+    proto_shots: list[Shot] = [
+        shot for chunk_result in results_per_chunk for shot in chunk_result
+    ]
+
+    if not proto_shots:
+        return []
+
+    # Step 2: Re-number all shots FIRST to give them unique IDs (MOVED FROM STEP 3)
+    # FIX: This must happen before concurrent refinement to avoid file name conflicts
+    logger.debug(f"Re-numbering {len(proto_shots)} shots for chapter {chapter.index}...")
+    for i, shot in enumerate(proto_shots):
+        shot.shot_id = i + 1
+    # Now all shots have a unique ID (1, 2, 3, ...) instead of -1.
+
+    # Step 3: Concurrently refine prompts for all newly generated shots (Scatter)
+    logger.info(f"Refining {len(proto_shots)} prompts for chapter {chapter.index}...")
+    # Pass the re-numbered proto_shots to the refinement tasks
+    refinement_tasks = [_refine_shot_prompt(s, book_path) for s in proto_shots]
+    all_shots = await asyncio.gather(*refinement_tasks)
+
+    # Step 4: Re-numbering is no longer needed here as it was done above.
+
+    return all_shots
+
+
+async def create_storyboard_for_chapters(chapters: list[Chapter], book_path: Path) -> list[Shot]:
+    """
+    并发处理所有章节，为它们创建完整的分镜和提示词。
+    """
+    logger.info(f"Creating storyboards for {len(chapters)} chapters concurrently...")
+    # 传递 book_path
+    tasks: list[Coroutine[Any, Any, list[Shot]]] = [
+        _process_chapter_content(chapter, book_path) for chapter in chapters
+    ]
+
+    results_per_chapter = await asyncio.gather(*tasks)
+
+    # Flatten the list of lists of shots into a single list
+    all_shots: list[Shot] = [
+        shot for chapter_shots in results_per_chapter for shot in chapter_shots
+    ]
+
+    logger.info(
+        f"Storyboard and prompting stage complete. Total shots created: {len(all_shots)}"
+    )
+    return all_shots
 </file>
 
 <file path="app/cache.py">
@@ -1113,13 +1718,16 @@ class PathConfig:
     cache_dir: Path = data_dir / "cache"
     book_dir: Path = data_dir / "book"
 
-    # 缓存子目录
+    # 缓存子目录 (用于通用、可丢弃的缓存)
     cache_llm: Path = cache_dir / "llm"
     cache_image: Path = cache_dir / "image"
     cache_audio: Path = cache_dir / "audio"
 
     def get_book_path(self, book_id: str) -> Path:
-        return self.book_dir / book_id
+        book_path = self.book_dir / book_id
+        # 在这里动态创建LLM资产目录
+        (book_path / "llm").mkdir(parents=True, exist_ok=True)
+        return book_path
 
     def __post_init__(self):
         """初始化后创建所有必要的目录"""
@@ -1195,522 +1803,6 @@ class Settings:
 
 # 创建一个全局单例配置对象
 settings = Settings()
-</file>
-
-<file path="app/ffmpeg_utils.py">
-# app/ffmpeg_utils.py
-import subprocess
-import platform
-import functools
-from loguru import logger
-
-
-@functools.lru_cache(maxsize=1)
-def get_ffmpeg_gpu_params():
-    """
-    自动检测并返回适用于当前系统的 FFmpeg GPU 加速参数。
-    使用 lru_cache 缓存结果，避免重复检测。
-
-    Returns:
-        dict: 包含 pre_input 和 output_params 的字典。
-    """
-    system = platform.system()
-    logger.info(f"检测操作系统: {system}")
-
-    # 检查 ffmpeg 是否存在
-    try:
-        subprocess.run(
-            ["ffmpeg", "-version"], capture_output=True, check=True, text=True
-        )
-    except (FileNotFoundError, subprocess.CalledProcessError):
-        logger.warning("系统中未找到 ffmpeg 或无法执行。将使用纯 CPU 编码。")
-        return {
-            "pre_input": [],
-            "output_params": {"codec": "libx264"},
-            "extra_params": [],
-        }
-
-    # NVIDIA (Windows/Linux)
-    if system in ["Windows", "Linux"]:
-        try:
-            result = subprocess.run(
-                ["ffmpeg", "-hwaccels"], capture_output=True, text=True
-            )
-            if "cuda" in result.stdout:
-                logger.info("✅ 检测到 NVIDIA CUDA 支持。")
-                # 检查 h264_nvenc 编码器
-                result = subprocess.run(
-                    ["ffmpeg", "-encoders"], capture_output=True, text=True
-                )
-                if "h264_nvenc" in result.stdout:
-                    logger.info("✅ 检测到 h264_nvenc 编码器。启用 NVIDIA GPU 加速。")
-                    return {
-                        "pre_input": ["-hwaccel", "cuda"],
-                        "output_params": {"codec": "h264_nvenc", "preset": "fast"},
-                        "extra_params": [],  # NVIDIA编码器不需要额外参数
-                    }
-        except (FileNotFoundError, subprocess.CalledProcessError):
-            pass  # ffmpeg 未找到或执行失败，继续尝试其他选项
-
-    # Apple Silicon / Intel (macOS)
-    if system == "Darwin":
-        try:
-            result = subprocess.run(
-                ["ffmpeg", "-hwaccels"], capture_output=True, text=True
-            )
-            if "videotoolbox" in result.stdout:
-                logger.info("✅ 检测到 Apple VideoToolbox 支持。")
-                # 检查 h264_videotoolbox 编码器
-                result = subprocess.run(
-                    ["ffmpeg", "-encoders"], capture_output=True, text=True
-                )
-                if "h264_videotoolbox" in result.stdout:
-                    logger.info(
-                        "✅ 检测到 h264_videotoolbox 编码器。启用 macOS GPU 加速。"
-                    )
-                    return {
-                        "pre_input": ["-hwaccel", "videotoolbox"],
-                        "output_params": {"codec": "h264_videotoolbox"},
-                        "extra_params": [
-                            "-b:v",
-                            "8000k",
-                        ],  # 比特率参数通过ffmpeg_params传递
-                    }
-        except (FileNotFoundError, subprocess.CalledProcessError):
-            pass
-
-    # Intel Quick Sync Video (Windows/Linux)
-    if system in ["Windows", "Linux"]:
-        try:
-            result = subprocess.run(
-                ["ffmpeg", "-hwaccels"], capture_output=True, text=True
-            )
-            if "qsv" in result.stdout:
-                logger.info("✅ 检测到 Intel QSV 支持。")
-                result = subprocess.run(
-                    ["ffmpeg", "-encoders"], capture_output=True, text=True
-                )
-                if "h264_qsv" in result.stdout:
-                    logger.info("✅ 检测到 h264_qsv 编码器。启用 Intel QSV 加速。")
-                    return {
-                        "pre_input": ["-hwaccel", "qsv"],
-                        "output_params": {"codec": "h264_qsv", "preset": "fast"},
-                        "extra_params": [],  # Intel QSV不需要额外参数
-                    }
-        except (FileNotFoundError, subprocess.CalledProcessError):
-            pass
-
-    logger.warning("⚠️ 未检测到可用的 GPU 加速硬件。将回退到 CPU (libx264) 进行编码。")
-    return {"pre_input": [], "output_params": {"codec": "libx264"}, "extra_params": []}
-</file>
-
-<file path="app/pipeline.py">
-# app/pipeline.py
-import asyncio
-import concurrent.futures
-from typing import Optional
-
-from .config import settings
-from .stages import content, storyboard, assets, finalizer
-from loguru import logger
-
-
-class Pipeline:
-    """
-    异步流水线控制器，负责编排整个视频生成过程。
-    """
-
-    def __init__(self, book_id: str, source_file: Optional[str] = None):
-        self.book_id = book_id
-        self.source_file = source_file
-        self.book_path = settings.paths.get_book_path(book_id)
-
-        # 为CPU密集型任务创建一个进程池执行器
-        self.process_executor = concurrent.futures.ProcessPoolExecutor()
-
-    async def run(self):
-        """按顺序执行流水线的各个阶段"""
-        start_time = asyncio.get_event_loop().time()
-
-        # --- 阶段 1: 内容获取 ---
-        logger.info("🚀 开始执行: 阶段 1: 内容获取")
-        chapters = await content.get_chapters(self.book_id, self.source_file)
-        if not chapters:
-            logger.error("内容获取失败，流水线终止。")
-            return
-        logger.info(f"✅ 完成: 阶段 1: 内容获取 | 获取到 {len(chapters)} 个章节")
-
-        # --- 阶段 2: 分镜与提示词生成 (并发) ---
-        logger.info("🚀 开始执行: 阶段 2: 生成分镜与提示词")
-        all_shots = await storyboard.create_storyboard_for_chapters(chapters)
-        if not all_shots:
-            logger.error("分镜生成失败，流水线终止。")
-            return
-        logger.info(
-            f"✅ 完成: 阶段 2: 生成分镜与提示词 | 共生成 {len(all_shots)} 个分镜"
-        )
-
-        # --- 阶段 3: 资产生成 (图片、音频、视频片段) ---
-        logger.info("🚀 开始执行: 阶段 3: 并行生成所有资产")
-        processed_shots = await assets.generate_all_assets(
-            all_shots, self.book_path, self.process_executor
-        )
-        successful_shots = [shot for shot in processed_shots if not shot.error]
-        if not successful_shots:
-            logger.error("所有资产生成失败，流水线终止。")
-            return
-        logger.info(
-            f"✅ 完成: 阶段 3: 并行生成所有资产 | 成功处理 {len(successful_shots)}/{len(all_shots)} 个镜头"
-        )
-
-        # --- 阶段 4: 最终合成 ---
-        logger.info("🚀 开始执行: 阶段 4: 合成最终视频")
-        await finalizer.merge_video_clips(self.book_id, successful_shots)
-        logger.info("✅ 完成: 阶段 4: 合成最终视频")
-
-        end_time = asyncio.get_event_loop().time()
-        logger.info(f"流水线总耗时: {end_time - start_time:.2f} 秒")
-
-        # 优雅地关闭进程池
-        self.process_executor.shutdown()
-</file>
-
-<file path="run.py">
-# run.py
-import asyncio
-import argparse
-from pathlib import Path
-import os
-import sys
-
-from loguru import logger
-
-from app.config import settings
-from app.llm_client import test_llm_connections
-from app.pipeline import Pipeline
-
-
-async def main():
-    """主异步函数，协调整个工作流"""
-    # --- Loguru Configuration ---
-    logger.remove()
-    log_level = "DEBUG" if os.getenv("VERBOSE_LOGGING", "true").lower() == "true" else "INFO"
-    logger.add(
-        sys.stderr,
-        level=log_level,
-        format=(
-            "<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> | "
-            "<level>{level: <8}</level> | "
-            "<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>"
-        ),
-        colorize=True,
-    )
-    # --- End Loguru Configuration ---
-
-    parser = argparse.ArgumentParser(
-        description="TaleStreamAI - 自动化小说转视频工作流"
-    )
-    parser.add_argument(
-        "source",
-        nargs="?",
-        default=settings.book_source,
-        help=f"书籍来源：可以是起点ID或本地.txt文件路径 (默认为: {settings.book_source})",
-    )
-    parser.add_argument(
-        "--book_id",
-        default=settings.custom_book_id,
-        help="为本地文件指定一个自定义的书籍ID (默认为文件名)",
-    )
-    parser.add_argument(
-        "--test-connections",
-        action="store_true",
-        help="仅运行API连接测试后退出",
-    )
-
-    args = parser.parse_args()
-
-    if args.test_connections:
-        await test_llm_connections()
-        return
-
-    # 更新配置以反映命令行参数
-    # (dataclasses 是不可变的, 所以我们创建一个新的)
-    # 技巧：使用 object.__setattr__ 来绕过 frozen=True 的限制进行修改
-    # 但更清晰的方式是在启动时就决定好配置
-    # 这里为了简单，我们假设 settings 已通过 .env 文件配置好，命令行仅用于临时覆盖
-    # 实际生产中可能会用更复杂的配置加载逻辑
-
-    # 使用命令行参数来确定 book_id
-    final_book_id = args.book_id
-    if not final_book_id:
-        if args.source.endswith(".txt"):
-            final_book_id = Path(args.source).stem
-        else:
-            final_book_id = args.source
-
-    logger.info(f"🚀 工作流启动，书籍ID: {final_book_id}")
-
-    # 初始化并运行流水线
-    pipeline = Pipeline(
-        book_id=final_book_id,
-        source_file=args.source if args.source.endswith(".txt") else None,
-    )
-
-    try:
-        await pipeline.run()
-        logger.info("🎉 工作流全部阶段成功完成！")
-    except Exception as e:
-        logger.exception(f"工作流执行过程中发生未捕获的严重错误: {e}")
-
-
-if __name__ == "__main__":
-    asyncio.run(main())
-</file>
-
-<file path="app/stages/storyboard.py">
-# app/stages/storyboard.py
-import re
-import json
-import asyncio
-from typing import Coroutine, Any
-
-import tiktoken
-from ..config import settings
-from ..llm_client import storyboard_client, prompt_client
-from loguru import logger
-from ..models import Chapter, Shot
-
-# --- Prompts ---
-STORYBOARD_SYSTEM_PROMPT = """
-你是一个资深的剧本编辑。你的任务是根据我输入的小说内容，生成详细的分镜脚本。
-请遵循以下规则：
-1.  **高密度分镜**: 为每2到4句话（特别是对话或关键动作描述）创建一个独立的分镜。确保充分捕捉场景的动态变化和人物的情感交流。不要遗漏任何情节。
-2.  **完整内容**: `text` 字段必须包含原始的小说文本，不要进行任何形式的概括或提炼。
-3.  **镜头语言**: `lensLanguage_cn` 和 `lensLanguage_en` 需要详细描述镜头，包含以下元素：
-    -   **角色**: 年龄、性别、外观、角色类型（如：年轻男子, 憔悴的拳手）。不要使用人名。
-    -   **动作**: 角色的具体动作或表情（如：揪住衣领, 疲惫地喘气, 愤怒地呐喊）。
-    -   **场景**: 故事发生的地点或背景（如：昏暗的地下拳台角落, 明亮的医院病房）。
-    -   **情绪**: 场景的氛围或角色的情感基调（如：紧张, 绝望, 痛苦, 狂喜）。
-    -   **风格**: 图像的艺术风格，固定为 **动漫风格, 细节丰富, 插画感**。
-    -   **镜头角度**: 摄像机的视角或构图（如：特写, 中景, 过肩镜头, 俯视）。
-    -   **灯光与环境**: 光线条件或环境氛围（如：刺眼的顶光, 窗外的月光, 闪烁的灯光）。
-4.  **镜头语言格式**: 必须是逗号分隔的关键词组合，例如：`年轻男子, 揪着李哥的领子, 拳台角落, 绝望, 动漫风格, 特写, 顶光`。
-
-请严格按照以下JSON格式返回，不要添加任何其他文字或解释，只返回有效的JSON数组：
-[
-    {
-        "id": "1",
-        "text": "鼻骨断了？我一下揪住了蚊子的衣服，说：「我还要打！你想办法！」",
-        "lensLanguage_cn": "年轻拳手, 揪住衣服, 拳台, 愤怒、急切, 动漫风格, 插画感, 中景, 强光",
-        "lensLanguage_en": "young boxer, grabbing clothes, boxing ring, angry, urgent, anime style, detailed, illustration, medium shot, strong light"
-    }
-]
-"""
-
-PROMPT_REFINE_SYSTEM_PROMPT = """
-你是一位专业的AI绘画提示词工程师。你的任务是基于给定的场景描述，生成一段高质量、细节丰富的英文提示词，用于动漫风格的图像生成。
-请遵循以下规则：
-1.  **核心要素**: 提示词必须以 `masterpiece, best quality, highres` 开头。
-2.  **风格统一**: 必须包含 `anime style, detailed illustration, vibrant colors` 来确保画风一致。
-3.  **细节丰富**: 将中文描述（角色、动作、场景、情绪、灯光）转化为具体、生动的英文关键词。使用括号 `()` 来强调重要元素，例如 `(red eyes:1.2)`。
-4.  **格式**: 所有关键词用逗号 `,` 分隔。
-5.  **简洁**: 不要添加任何解释或无关的文字，直接输出提示词。
-
-例如，如果输入是 "年轻男子, 愤怒地呐喊, 雨中的街道, 绝望, 霓虹灯光, 特写"，一个好的输出是：
-masterpiece, best quality, highres, anime style, detailed illustration, vibrant colors, 1boy, young man, (screaming in anger:1.3), close-up shot, rain, wet clothes, desperate expression, neon lights reflection, dramatic lighting
-"""
-
-
-def _split_content_by_tokens(
-    content: str, max_tokens: int, tokenzer_model_name: str = "gpt-4o"
-) -> list[str]:
-    """按token数量将文本分割成块。"""
-    logger.debug(f"Splitting content by tokens, max_tokens={max_tokens}")
-    try:
-        encoding = tiktoken.encoding_for_model(tokenzer_model_name)
-    except KeyError:
-        logger.warning(f"Model '{tokenzer_model_name}' not found for tiktoken, using 'cl100k_base'.")
-        encoding = tiktoken.get_encoding("cl100k_base")
-
-    paragraphs = content.split("\n")
-    chunks, current_chunk_paragraphs, current_chunk_tokens = [], [], 0
-
-    for p in paragraphs:
-        if not p.strip():
-            continue
-        p_tokens = len(encoding.encode(p))
-
-        if p_tokens > max_tokens:
-            logger.warning(
-                f"Paragraph with {p_tokens} tokens exceeds max_tokens {max_tokens}, force splitting."
-            )
-            encoded_p = encoding.encode(p)
-            for i in range(0, len(encoded_p), max_tokens):
-                chunks.append(encoding.decode(encoded_p[i : i + max_tokens]))
-            continue
-
-        if current_chunk_tokens + p_tokens > max_tokens:
-            chunks.append("\n".join(current_chunk_paragraphs))
-            current_chunk_paragraphs = [p]
-            current_chunk_tokens = p_tokens
-        else:
-            current_chunk_paragraphs.append(p)
-            current_chunk_tokens += p_tokens
-
-    if current_chunk_paragraphs:
-        chunks.append("\n".join(current_chunk_paragraphs))
-
-    logger.info(f"Content split into {len(chunks)} chunks.")
-    return chunks
-
-
-async def _refine_shot_prompt(shot: Shot) -> Shot:
-    """为单个Shot对象优化生成图像的提示词"""
-    if not shot.storyboard_prompt_en:
-        shot.error = "Missing storyboard_prompt_en for refinement."
-        logger.warning(
-            f"Skipping prompt refinement for shot {shot.get_full_id()}: No English storyboard prompt."
-        )
-        return shot
-
-    messages = [{"role": "user", "content": shot.storyboard_prompt_en}]
-    refined_prompt = await prompt_client.chat_completion(
-        messages, system=PROMPT_REFINE_SYSTEM_PROMPT
-    )
-
-    if "ERROR" in refined_prompt:
-        shot.error = f"Prompt refinement failed: {refined_prompt}"
-        logger.error(f"Failed to refine prompt for shot {shot.get_full_id()}: {refined_prompt}")
-        # Fallback: use the original EN prompt and add the global style
-        shot.image_prompt = f"{shot.storyboard_prompt_en}, {settings.image_style_prompt}"
-    else:
-        shot.image_prompt = f"{refined_prompt}, {settings.image_style_prompt}"
-
-    return shot
-
-
-async def _process_single_chunk(
-    chunk: str, chapter_index: int, chunk_index: int, num_chunks: int
-) -> list[Shot]:
-    """处理单个文本块，生成原始Shots列表。"""
-    logger.info(
-        f"Processing chunk {chunk_index + 1}/{num_chunks} for chapter {chapter_index}..."
-    )
-    messages = [{"role": "user", "content": chunk}]
-    response_json_str = await storyboard_client.chat_completion(
-        messages, system=STORYBOARD_SYSTEM_PROMPT
-    )
-
-    if "ERROR" in response_json_str:
-        logger.error(
-            f"Storyboard generation failed for chunk {chunk_index + 1} of chapter {chapter_index}: {response_json_str}"
-        )
-        return []
-
-    try:
-        # Clean up the JSON string before parsing
-        response_json_str = re.sub(
-            r"```json\s*|\s*```", "", response_json_str
-        ).strip()
-        storyboard_data = json.loads(response_json_str)
-        if not isinstance(storyboard_data, list):
-            # Try to find a list within a dictionary if the LLM wrapped it
-            if isinstance(storyboard_data, dict):
-                found_list = False
-                for key, value in storyboard_data.items():
-                    if isinstance(value, list):
-                        storyboard_data = value
-                        found_list = True
-                        logger.warning(
-                            f"LLM returned a dictionary, but a list was found and extracted from key '{key}'."
-                        )
-                        break
-                if not found_list:
-                    raise json.JSONDecodeError(
-                        "Response is not a list and no list found in dictionary values",
-                        response_json_str,
-                        0,
-                    )
-            else:
-                raise json.JSONDecodeError(
-                    "Response is not a list", response_json_str, 0
-                )
-
-        proto_shots = []
-        for item in storyboard_data:
-            shot = Shot(
-                shot_id=-1,  # Temporary ID, will be re-numbered later
-                chapter_index=chapter_index,
-                original_text=item.get("text", ""),
-                storyboard_prompt_cn=item.get("lensLanguage_cn", ""),
-                storyboard_prompt_en=item.get("lensLanguage_en", ""),
-            )
-            proto_shots.append(shot)
-        return proto_shots
-
-    except json.JSONDecodeError as e:
-        logger.error(
-            f"JSON parsing failed for chunk {chunk_index + 1} of chapter {chapter_index}: {e}"
-        )
-        logger.debug(f"Problematic JSON string: {response_json_str[:500]}...")
-        return []
-
-
-async def _process_chapter_content(chapter: Chapter) -> list[Shot]:
-    """处理单个章节的完整内容，并发生成所有Shots并优化提示词。"""
-    storyboard_config = settings.storyboard_llm
-    content_chunks = _split_content_by_tokens(
-        chapter.content,
-        max_tokens=storyboard_config.max_tokens,
-    )
-
-    # Step 1: Concurrently create storyboards for all chunks (Scatter)
-    chunk_processing_tasks = [
-        _process_single_chunk(chunk, chapter.index, i, len(content_chunks))
-        for i, chunk in enumerate(content_chunks)
-    ]
-    results_per_chunk = await asyncio.gather(*chunk_processing_tasks)
-
-    # Flatten the results from all chunks into a single list of shots
-    proto_shots: list[Shot] = [
-        shot for chunk_result in results_per_chunk for shot in chunk_result
-    ]
-
-    if not proto_shots:
-        return []
-
-    # Step 2: Concurrently refine prompts for all newly generated shots (Scatter)
-    logger.info(f"Refining {len(proto_shots)} prompts for chapter {chapter.index}...")
-    refinement_tasks = [_refine_shot_prompt(s) for s in proto_shots]
-    all_shots = await asyncio.gather(*refinement_tasks)
-
-    # Step 3: Re-number all shots to ensure correct and sequential IDs
-    for i, shot in enumerate(all_shots):
-        shot.shot_id = i + 1
-
-    return all_shots
-
-
-async def create_storyboard_for_chapters(chapters: list[Chapter]) -> list[Shot]:
-    """
-    并发处理所有章节，为它们创建完整的分镜和提示词。
-    """
-    logger.info(f"Creating storyboards for {len(chapters)} chapters concurrently...")
-    tasks: list[Coroutine[Any, Any, list[Shot]]] = [
-        _process_chapter_content(chapter) for chapter in chapters
-    ]
-
-    results_per_chapter = await asyncio.gather(*tasks)
-
-    # Flatten the list of lists of shots into a single list
-    all_shots: list[Shot] = [
-        shot for chapter_shots in results_per_chapter for shot in chapter_shots
-    ]
-
-    logger.info(
-        f"Storyboard and prompting stage complete. Total shots created: {len(all_shots)}"
-    )
-    return all_shots
 </file>
 
 <file path="README.md">
@@ -1840,7 +1932,9 @@ import sys
 import asyncio
 import json
 import random
-from typing import AsyncIterator, Any
+import re
+from typing import AsyncIterator, Any, Optional
+from pathlib import Path
 
 import tiktoken
 from httpx import RemoteProtocolError
@@ -1855,7 +1949,6 @@ from openai.types.chat import ChatCompletionChunk, ChatCompletionMessageParam
 
 from .config import LLMConfig, settings
 from loguru import logger
-from .cache import cache
 
 
 EMOJI_LIST = ["🚀", "💡", "✨", "🤖", "🧠", "✍️", "🎨", "🎬", "🎶", "💬"]
@@ -1871,26 +1964,41 @@ class UnifiedLLMClient:
         )
         self.semaphore = asyncio.Semaphore(settings.max_llm_threads)
 
-    @cache(settings.paths.cache_llm, "text")
-    async def _cached_chat_completion(self, messages_json: str, system: str) -> str:
-        """内部缓存方法，只用于非流式调用"""
+    async def chat_completion(
+        self, messages: list[dict[str, Any]], system: str = "", output_path: Optional[Path] = None
+    ) -> str:
+        """
+        执行非流式聊天补全。
+        如果提供了 output_path，它将作为项目资产进行缓存/读取。
+        否则，它将是一个纯粹的API调用。
+        """
+        # 如果提供了路径，则启用资产化缓存逻辑
+        if output_path:
+            if output_path.exists():
+                logger.debug(f"✅ LLM 资产命中: 从 {output_path} 读取")
+                return output_path.read_text("utf-8")
+            
+            logger.debug(f"❌ LLM 资产未命中: 为 {output_path} 执行API调用")
+
         full_response = ""
-        # The messages are passed as a JSON string to be hashable by the cache decorator.
-        # We need to load them back into a list of dictionaries here.
-        messages = json.loads(messages_json)
         async for chunk in self._stream_implementation(messages, system):
             full_response += chunk
-        return full_response
+        
+        # 在保存和返回之前，清理LLM可能添加的Markdown代码块
+        if "ERROR" not in full_response:
+            # 使用正则表达式移除 ```json 和 ```
+            cleaned_response = re.sub(r"```json\s*|\s*```", "", full_response).strip()
+        else:
+            # 如果是错误信息，则不进行清理
+            cleaned_response = full_response
 
-    async def chat_completion(self, messages: list[dict[str, Any]], system: str = "") -> str:
-        """
-        执行非流式聊天补全，利用缓存。
-        """
-        logger.debug(f"Executing non-streamed chat completion for model {self.config.model}")
-        # We dump the messages to a JSON string because a list of dicts is not hashable,
-        # which is required by our caching decorator.
-        messages_json = json.dumps(messages)
-        return await self._cached_chat_completion(messages_json, system=system)
+        # 如果提供了路径且API调用成功，则保存清理后的结果
+        if output_path and "ERROR" not in cleaned_response:
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.write_text(cleaned_response, "utf-8")
+            logger.debug(f"📝 LLM 资产已保存至: {output_path}")
+
+        return cleaned_response
 
     async def chat_completion_stream(
         self, messages: list[dict[str, Any]], system: str = ""

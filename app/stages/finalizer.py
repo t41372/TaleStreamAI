@@ -96,7 +96,7 @@ async def merge_video_clips(book_id: str, shots: list[Shot]):
             # ffmpeg concat demuxer 需要对特殊字符进行转义
             # 但更安全的方式是使用相对路径并在安全的工作目录中运行
             safe_path = clip_path.resolve().as_posix()
-            f.write(f"file '{safe_path}'\\n")
+            f.write(f"file '{safe_path}'\n")
 
     # 合并字幕
     await _merge_srt_files(sorted_shots, final_srt_path)

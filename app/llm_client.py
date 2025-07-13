@@ -7,7 +7,9 @@ import sys
 import asyncio
 import json
 import random
-from typing import AsyncIterator, Any
+import re
+from typing import AsyncIterator, Any, Optional
+from pathlib import Path
 
 import tiktoken
 from httpx import RemoteProtocolError
@@ -22,7 +24,6 @@ from openai.types.chat import ChatCompletionChunk, ChatCompletionMessageParam
 
 from .config import LLMConfig, settings
 from loguru import logger
-from .cache import cache
 
 
 EMOJI_LIST = ["🚀", "💡", "✨", "🤖", "🧠", "✍️", "🎨", "🎬", "🎶", "💬"]
@@ -38,26 +39,41 @@ class UnifiedLLMClient:
         )
         self.semaphore = asyncio.Semaphore(settings.max_llm_threads)
 
-    @cache(settings.paths.cache_llm, "text")
-    async def _cached_chat_completion(self, messages_json: str, system: str) -> str:
-        """内部缓存方法，只用于非流式调用"""
+    async def chat_completion(
+        self, messages: list[dict[str, Any]], system: str = "", output_path: Optional[Path] = None
+    ) -> str:
+        """
+        执行非流式聊天补全。
+        如果提供了 output_path，它将作为项目资产进行缓存/读取。
+        否则，它将是一个纯粹的API调用。
+        """
+        # 如果提供了路径，则启用资产化缓存逻辑
+        if output_path:
+            if output_path.exists():
+                logger.debug(f"✅ LLM 资产命中: 从 {output_path} 读取")
+                return output_path.read_text("utf-8")
+            
+            logger.debug(f"❌ LLM 资产未命中: 为 {output_path} 执行API调用")
+
         full_response = ""
-        # The messages are passed as a JSON string to be hashable by the cache decorator.
-        # We need to load them back into a list of dictionaries here.
-        messages = json.loads(messages_json)
         async for chunk in self._stream_implementation(messages, system):
             full_response += chunk
-        return full_response
+        
+        # 在保存和返回之前，清理LLM可能添加的Markdown代码块
+        if "ERROR" not in full_response:
+            # 使用正则表达式移除 ```json 和 ```
+            cleaned_response = re.sub(r"```json\s*|\s*```", "", full_response).strip()
+        else:
+            # 如果是错误信息，则不进行清理
+            cleaned_response = full_response
 
-    async def chat_completion(self, messages: list[dict[str, Any]], system: str = "") -> str:
-        """
-        执行非流式聊天补全，利用缓存。
-        """
-        logger.debug(f"Executing non-streamed chat completion for model {self.config.model}")
-        # We dump the messages to a JSON string because a list of dicts is not hashable,
-        # which is required by our caching decorator.
-        messages_json = json.dumps(messages)
-        return await self._cached_chat_completion(messages_json, system=system)
+        # 如果提供了路径且API调用成功，则保存清理后的结果
+        if output_path and "ERROR" not in cleaned_response:
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.write_text(cleaned_response, "utf-8")
+            logger.debug(f"📝 LLM 资产已保存至: {output_path}")
+
+        return cleaned_response
 
     async def chat_completion_stream(
         self, messages: list[dict[str, Any]], system: str = ""

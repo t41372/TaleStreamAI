@@ -80,9 +80,11 @@ async def main():
 
     try:
         await pipeline.run()
-        logger.info("🎉 工作流全部阶段成功完成！")
     except Exception as e:
         logger.exception(f"工作流执行过程中发生未捕获的严重错误: {e}")
+    else:
+        # This 'else' block only runs if the 'try' block completes without any exceptions
+        logger.info("🎉 工作流全部阶段成功完成！")
 
 
 if __name__ == "__main__":
