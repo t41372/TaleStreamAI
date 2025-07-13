@@ -121,12 +121,12 @@ async def test_llm_connections():
     storyboard_response = await storyboard_client.chat_completion(test_messages)
     if "ERROR" in storyboard_response:
         log_error("Storyboard client test FAILED.")
-    else:
+        else:
         log_info(f"Storyboard client test OK. Response: {storyboard_response[:50]}...")
 
     log_info("Testing Prompt Client...")
     prompt_response = await prompt_client.chat_completion(test_messages)
     if "ERROR" in prompt_response:
         log_error("Prompt client test FAILED.")
-    else:
+            else:
         log_info(f"Prompt client test OK. Response: {prompt_response[:50]}...")
