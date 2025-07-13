@@ -8,9 +8,12 @@ from app.logger import log_info, log_error
 from app.llm_client import test_llm_connections
 from app.pipeline import Pipeline
 
+
 async def main():
     """主异步函数，协调整个工作流"""
-    parser = argparse.ArgumentParser(description="TaleStreamAI - 自动化小说转视频工作流")
+    parser = argparse.ArgumentParser(
+        description="TaleStreamAI - 自动化小说转视频工作流"
+    )
     parser.add_argument(
         "source",
         nargs="?",
@@ -27,7 +30,7 @@ async def main():
         action="store_true",
         help="仅运行API连接测试后退出",
     )
-    
+
     args = parser.parse_args()
 
     if args.test_connections:
@@ -40,7 +43,7 @@ async def main():
     # 但更清晰的方式是在启动时就决定好配置
     # 这里为了简单，我们假设 settings 已通过 .env 文件配置好，命令行仅用于临时覆盖
     # 实际生产中可能会用更复杂的配置加载逻辑
-    
+
     # 使用命令行参数来确定 book_id
     final_book_id = args.book_id
     if not final_book_id:
@@ -48,12 +51,15 @@ async def main():
             final_book_id = Path(args.source).stem
         else:
             final_book_id = args.source
-    
+
     log_info(f"🚀 工作流启动，书籍ID: {final_book_id}")
 
     # 初始化并运行流水线
-    pipeline = Pipeline(book_id=final_book_id, source_file=args.source if args.source.endswith(".txt") else None)
-    
+    pipeline = Pipeline(
+        book_id=final_book_id,
+        source_file=args.source if args.source.endswith(".txt") else None,
+    )
+
     try:
         await pipeline.run()
         log_info("🎉 工作流全部阶段成功完成！")
@@ -62,4 +68,4 @@ async def main():
 
 
 if __name__ == "__main__":
-    asyncio.run(main()) 
+    asyncio.run(main())

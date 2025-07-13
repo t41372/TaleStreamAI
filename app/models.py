@@ -3,12 +3,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
+
 @dataclass
 class Shot:
     """
     表示一个独立的分镜（或镜头）。
     这是我们流水线中处理的基本工作单元。
     """
+
     # 核心内容
     shot_id: int
     chapter_index: int
@@ -32,9 +34,11 @@ class Shot:
         """返回唯一的镜头ID，格式为 '章节-镜头'"""
         return f"{self.chapter_index}-{self.shot_id}"
 
+
 @dataclass
 class Chapter:
     """表示一个完整的章节，包含多个分镜。"""
+
     index: int
     content: str
-    shots: list[Shot] = field(default_factory=list) 
+    shots: list[Shot] = field(default_factory=list)

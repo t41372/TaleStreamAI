@@ -6,14 +6,27 @@
 import sys
 import asyncio
 import json
+import random
 from typing import AsyncIterator, Any
 
-from openai import AsyncOpenAI, APIError, APIConnectionError, RateLimitError, AsyncStream
+import tiktoken
+from httpx import RemoteProtocolError
+from openai import (
+    AsyncOpenAI,
+    APIError,
+    APIConnectionError,
+    RateLimitError,
+    AsyncStream,
+)
 from openai.types.chat import ChatCompletionChunk, ChatCompletionMessageParam
 
 from .config import LLMConfig, settings
 from .logger import log_error, log_info, log_debug
 from .cache import llm_cache
+
+
+EMOJI_LIST = ["🚀", "💡", "✨", "🤖", "🧠", "✍️", "🎨", "🎬", "🎶", "💬"]
+
 
 class UnifiedLLMClient:
     def __init__(self, config: LLMConfig):
@@ -45,7 +58,7 @@ class UnifiedLLMClient:
         # which is required by our caching decorator.
         messages_json = json.dumps(messages)
         return await self._cached_chat_completion(messages_json, system=system)
-        
+
     async def chat_completion_stream(
         self, messages: list[dict[str, Any]], system: str = ""
     ) -> AsyncIterator[str]:
@@ -64,69 +77,108 @@ class UnifiedLLMClient:
         核心流式实现，包含详细日志和用户反馈。
         """
         log_debug(f"System prompt: {system}")
-        
+
+        # 为每个 LLM 调用创建一个独特的 emoji 和随机数
+        random_emoji = random.choice(EMOJI_LIST)
+        random_number = str(random.randint(0, 9))
+        call_id = f"{random_emoji}{random_number}"
+
         # OpenAI的SDK类型检查很严格，这里进行转换
-        final_messages: list[ChatCompletionMessageParam] = messages # type: ignore
+        final_messages: list[ChatCompletionMessageParam] = messages  # type: ignore
         if system:
             final_messages.insert(0, {"role": "system", "content": system})
 
         stream: AsyncStream[ChatCompletionChunk] | None = None
-        try:
-            stream = await self.client.chat.completions.create(
-                model=self.config.model,
-                messages=final_messages,
-                stream=True,
-                temperature=0.5,
-            )
-            # 用户反馈开始
-            sys.stdout.write(f"LLM ({self.config.model}): ")
-            sys.stdout.flush()
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                stream = await self.client.chat.completions.create(
+                    model=self.config.model,
+                    messages=final_messages,
+                    stream=True,
+                    temperature=0.5,
+                )
 
-            async for chunk in stream:
-                # 检查是否有 'reasoning' (某些模型支持)
-                if (
-                    hasattr(chunk.choices[0].delta, "tool_calls") # Groq/OpenAI reasoning in tool_calls
-                    and chunk.choices[0].delta.tool_calls
-                ):
-                    sys.stdout.write('.')
-                    sys.stdout.flush()
+                # 在输出前，打印最后一个 message 的前 100 个字符 到 dev null
+                print(f"LLM ({self.config.model}) 开始输出 [{call_id}]:")
+                print(f"\"\"\"{final_messages[-1]['content'][:50]}...\"\"\"")
+                # 输出 message 的总 token 数 (用 tiktoken 计算)
 
-                if content := chunk.choices[0].delta.content:
-                    sys.stdout.write('*')
-                    sys.stdout.flush()
-                    yield content
-            
-            # 用户反馈结束
-            sys.stdout.write("\n")
-            sys.stdout.flush()
+                encoding = tiktoken.encoding_for_model("gpt-4o")
+                total_tokens = sum(
+                    len(encoding.encode(m["content"])) for m in final_messages if m.get("content")
+                )
+                print(f" 总 token 数: {total_tokens}\n\n")
 
-        except (APIConnectionError, RateLimitError, APIError) as e:
-            log_error(f"LLM API Error for model {self.config.model}: {e}")
-            # 在流中产生一个错误信息，让下游知道
-            yield f"ERROR: LLM call failed. {e}"
-        finally:
-            if stream:
-                await stream.close()
-                log_debug("LLM Stream closed.")
+                sys.stdout.flush()
+
+                # 每 4 个推理 chunk 打印一个点，每 4 个内容 chunk 打印一个星号
+                reasoning_counter = 0
+                content_counter = 0
+                async for chunk in stream:
+                    # 检查是否有 'reasoning' (某些模型支持)
+                    if (
+                        hasattr(chunk.choices[0].delta, "reasoning_content")
+                        and chunk.choices[0].delta.reasoning_content
+                    ):
+                        reasoning_counter += 1
+                        if reasoning_counter % 4 == 0:
+                            sys.stdout.write(random_number)
+                            sys.stdout.flush()
+
+                    if content := chunk.choices[0].delta.content:
+                        content_counter += 1
+                        if content_counter % 4 == 0:
+                            sys.stdout.write(random_emoji)
+                            sys.stdout.flush()
+                        yield content
+
+                # 用户反馈结束
+                sys.stdout.write(f"\nLLM Call: {call_id} 运行完成\n")
+                sys.stdout.flush()
+                return  # 成功完成，退出重试循环
+
+            except (APIConnectionError, RateLimitError, APIError, RemoteProtocolError) as e:
+                log_info(
+                    f"LLM API Error on attempt {attempt + 1}/{max_retries} for model {self.config.model}: {e}"
+                )
+                if attempt < max_retries - 1:
+                    wait_time = 2**attempt
+                    log_info(f"Retrying in {wait_time}s...")
+                    await asyncio.sleep(wait_time)
+                else:
+                    log_error(
+                        f"LLM call failed after {max_retries} attempts for model {self.config.model}."
+                    )
+                    yield f"ERROR: LLM call failed. {e}"
+            finally:
+                if stream:
+                    await stream.close()
+                    log_debug(f"LLM Stream closed for call {call_id}.")
+
+        # 如果所有重试都失败了，确保有一个最终的错误信息
+        log_error(f"LLM call {call_id} failed completely after all retries.")
+
 
 # 全局客户端实例
 storyboard_client = UnifiedLLMClient(settings.storyboard_llm)
 prompt_client = UnifiedLLMClient(settings.prompt_llm)
 
+
 async def test_llm_connections():
     log_info("Testing LLM connections...")
     test_messages = [{"role": "user", "content": "Hello!"}]
-    
+
     log_info("Testing Storyboard Client...")
     storyboard_response = await storyboard_client.chat_completion(test_messages)
     if "ERROR" in storyboard_response:
         log_error("Storyboard client test FAILED.")
-        else:
+    else:
         log_info(f"Storyboard client test OK. Response: {storyboard_response[:50]}...")
 
     log_info("Testing Prompt Client...")
     prompt_response = await prompt_client.chat_completion(test_messages)
     if "ERROR" in prompt_response:
         log_error("Prompt client test FAILED.")
-            else:
+    else:
         log_info(f"Prompt client test OK. Response: {prompt_response[:50]}...")

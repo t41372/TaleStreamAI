@@ -3,12 +3,11 @@
 提供詳細的進度追蹤和狀態記錄
 """
 
-import logging
 import os
 import sys
-from datetime import datetime
+import logging
 from pathlib import Path
-from typing import Optional, Any
+from typing import Optional
 from dotenv import load_dotenv
 
 load_dotenv()
