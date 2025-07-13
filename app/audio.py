@@ -5,17 +5,10 @@ import json
 from tqdm import tqdm
 import concurrent.futures
 import time
-import logging
 import threading
 from .edge import generate_audio_with_edge_tts, DEFAULT_VOICE
-
-# 设置日志 - 仅记录错误
-logging.basicConfig(
-    level=logging.ERROR,
-    format="%(asctime)s - %(levelname)s - %(message)s",
-    handlers=[logging.StreamHandler()],
-)
-logger = logging.getLogger(__name__)
+from .logger import (log_step_start, log_step_complete, log_progress, log_info,
+                    log_error, log_debug, log_concurrent, log_file_operation)
 
 # 加载环境变量
 load_dotenv(override=True)
@@ -41,6 +34,9 @@ async def generate_audio_async(text: str, audio_path: str, original_text: str = 
         # Get voice from environment or use default
         voice = os.getenv("EDGE_TTS_VOICE", DEFAULT_VOICE)
         
+        log_debug(f"開始生成音頻: {os.path.basename(audio_path)} | 語音: {voice}")
+        start_time = time.time()
+        
         # Generate audio and subtitles
         subtitle_path = os.path.splitext(audio_path)[0] + ".srt"
         success, _ = await generate_audio_with_edge_tts(
@@ -51,9 +47,16 @@ async def generate_audio_async(text: str, audio_path: str, original_text: str = 
             original_text=original_text
         )
         
+        duration = time.time() - start_time
+        if success:
+            log_file_operation("音頻生成成功", audio_path)
+            log_debug(f"音頻生成耗時: {duration:.2f}s")
+        else:
+            log_error(f"音頻生成失敗: {os.path.basename(audio_path)}")
+        
         return success
     except Exception as e:
-        logger.error(f"Edge TTS generation failed: {e}")
+        log_error(f"Edge TTS 生成失敗: {str(e)}")
         return False
 
 
@@ -81,23 +84,32 @@ def update_json_with_audio_path(chapter_file_path, item_id, audio_path):
     # 使用锁确保线程安全
     with json_locks[chapter_file_path]:
         try:
+            log_debug(f"更新JSON文件: {os.path.basename(chapter_file_path)} | ID: {item_id}")
+            
             # 读取JSON文件
             with open(chapter_file_path, "r", encoding="utf-8") as f:
                 chapter_data = json.load(f)
 
             # 查找对应的项并更新
+            updated = False
             for item in chapter_data:
                 if item["id"] == item_id:
                     item["audio_path"] = audio_path
+                    updated = True
                     break
+
+            if not updated:
+                log_error(f"未找到ID為 {item_id} 的項目")
+                return False
 
             # 写回JSON文件
             with open(chapter_file_path, "w", encoding="utf-8") as f:
                 json.dump(chapter_data, f, ensure_ascii=False, indent=4)
 
+            log_debug(f"JSON文件更新成功: {os.path.basename(chapter_file_path)}")
             return True
         except Exception as e:
-            logger.error(f"更新JSON文件失败：{str(e)}")
+            log_error(f"更新JSON文件失敗：{str(e)}")
             return False
 
 

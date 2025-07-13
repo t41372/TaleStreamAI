@@ -5,8 +5,7 @@ description = "AI-powered novel to video generation pipeline using Edge TTS and 
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "black>=25.1.0",
-    "bs4>=0.0.2",
+    "beautifulsoup4>=4.13.3",
     "python-dotenv>=1.0.1",
     "moviepy>=1.0.3",
     "pillow>=11.1.0",
@@ -14,18 +13,16 @@ dependencies = [
     "requests>=2.32.3",
     "tqdm>=4.67.1",
     "edge-tts>=7.0.2",
-    "pytest>=8.4.1",
-    "pytest-asyncio>=1.0.0",
     "srt>=3.5.3",
     "openai>=1.95.1",
-    "librosa>=0.11.0",
+    "aiohttp>=3.10.0",
 ]
 
 [project.optional-dependencies]
 dev = [
-    "black",
-    "pytest",
-    "pytest-asyncio",
+    "black>=25.1.0",
+    "pytest>=8.4.1",
+    "pytest-asyncio>=1.0.0",
 ]
 
 [tool.black]

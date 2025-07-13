@@ -8,26 +8,29 @@ from app.audio import create_book_audio
 from app.tts import create_tts
 from app.video import create_book_video
 from app.video_end import save_output_video
-from app.llm_client import test_all_connections
+from app.llm_client import test_all_connections, async_test_all_connections
+from app.logger import log_info, log_step_start, log_step_complete, log_error
 
 
 def main():
     """Main function to process a novel (from URL or local file)."""
+    log_info("🚀 TaleStreamAI 開始運行...")
+    
     # 检查是否是测试API连接
     if len(sys.argv) >= 2 and sys.argv[1] == "--test-api":
-        print("测试所有API连接...")
+        log_step_start("API連接測試", "測試所有配置的API連接")
         results = test_all_connections()
         
-        print("\n=== API連接測試結果 ===")
+        log_info("=== API連接測試結果 ===")
         for api_type, success in results.items():
             status = "✅ 成功" if success else "❌ 失敗"
-            print(f"{api_type.capitalize()}: {status}")
+            log_info(f"{api_type.capitalize()}: {status}")
         
         all_success = all(results.values())
         if all_success:
-            print("\n🎉 所有API連接正常！")
+            log_info("🎉 所有API連接正常！")
         else:
-            print("\n⚠️  部分API連接失敗，請檢查.env配置")
+            log_error("⚠️  部分API連接失敗，請檢查.env配置")
         return
     
     # 支持命令行参数指定本地文件
@@ -45,9 +48,9 @@ def main():
         else:
             book_id = sys.argv[1]
     
-    print(f"处理书籍ID: {book_id}")
+    log_info(f"📖 處理書籍ID: {book_id}")
     if local_file:
-        print(f"使用本地文件: {local_file}")
+        log_info(f"📄 使用本地文件: {local_file}")
     
     # 获取书籍内容
     book = get_book_content(book_id, local_file)
