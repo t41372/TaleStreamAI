@@ -25,16 +25,23 @@
 
 ## 项目流程
 
-| 文件名       | 功能           | 技术栈                   |
-| ------------ | -------------- | ------------------------ |
-| main.py      | 获取书籍内容   | 爬虫 + 本地文件支持      |
-| board.py     | 生成章节分镜   | Gemini-2.0-flash         |
-| prompt.py    | 润色分镜提示词 | DeepSeek-v3              |
-| image.py     | 生成图片       | Flux API                 |
-| audio.py     | 生成音频       | Edge TTS + 异步并发      |
-| tts.py       | 生成字幕       | Edge TTS 原生字幕        |
-| video.py     | 生成视频       | FFmpeg GPU 加速版        |
-| video_end.py | 生成完整视频   | FFmpeg GPU 加速版        |
+| 文件名       | 功能           | 技术栈                   | 数据流转           |
+| ------------ | -------------- | ------------------------ | ------------------ |
+| main.py      | 获取书籍内容   | 爬虫 + 本地文件支持      | 原始文本           |
+| board.py     | 生成章节分镜   | Gemini-2.0-flash         | text → lensLanguage_en |
+| prompt.py    | 润色分镜提示词 | DeepSeek-v3              | lensLanguage_en → lensLanguage_end |
+| image.py     | 生成图片       | Flux API                 | lensLanguage_end → images |
+| audio.py     | 生成音频       | Edge TTS + 异步并发      | text → audio + subtitles |
+| tts.py       | 生成字幕       | Edge TTS 原生字幕        | 字幕时間校正       |
+| video.py     | 生成视频       | FFmpeg GPU 加速版        | images + audio → videos |
+| video_end.py | 生成完整视频   | FFmpeg GPU 加速版        | videos → final output |
+
+### 🔧 关键数据流修复
+
+**重要更新**: 修复了关键的数据流断裂问题：
+- 在 `board.py` 和 `image.py` 之间添加了 `prompt.py` 处理步骤
+- 确保 `lensLanguage_en` 正确转换为 `lensLanguage_end` 用于图片生成
+- 使用 pathlib 替代 f-string 路径拼接，提升跨平台兼容性
 
 ## 本地运行
 
@@ -106,6 +113,15 @@ ffmpeg -hwaccels
 
 ## 运行项目
 
+### 架构与数据流
+
+详细的架构说明请参考: [📖 架构和数据流文档](docs/ARCHITECTURE_AND_DATA_FLOW.md)
+
+核心数据流：
+```
+文本内容 → 分镜生成 → 提示词优化 → 图片生成 → 音频合成 → 视频组装
+```
+
 ### 快速开始（推荐）
 
 ```shell
@@ -121,17 +137,35 @@ uv run main.py novel.txt my_book_id
 
 ### 分步执行
 
+如需要调试特定步骤，可分别执行：
+
 ```shell
-# 逐步执行各个阶段
-uv run python app/main.py      # 获取小说内容
-uv run python board.py         # 生成分镜
-uv run python prompt.py        # 优化提示词
-uv run python image.py         # 生成图片
-uv run python audio.py         # 合成音频  
-uv run python tts.py           # 生成字幕
-uv run python video.py         # 制作分镜视频
-uv run python video_end.py     # 最终合成
+# 1. 获取小说内容
+uv run python -m app.main        
+
+# 2. 生成分镜
+uv run python -m app.board       
+
+# 3. 优化提示词（关键步骤！）
+uv run python -m app.prompt      
+
+# 4. 生成图片
+uv run python -m app.image       
+
+# 5. 合成音频
+uv run python -m app.audio       
+
+# 6. 生成字幕  
+uv run python -m app.tts         
+
+# 7. 制作分镜视频
+uv run python -m app.video       
+
+# 8. 最终合成
+uv run python -m app.video_end   
 ```
+
+**重要**: 步骤3（提示词优化）是关键环节，不可跳过！
 
 ### API 连接测试
 
@@ -142,9 +176,14 @@ uv run main.py --test-api
 
 ## 核心优势
 
-### v0.2.0 重大更新
+### v0.2.0 重大更新 - 架构优化
 
-1. **无需复杂部署**: 
+1. **🔧 关键修复**: 
+   - 修复了分镜→图片生成的数据流断裂问题
+   - 确保提示词正确优化后再进行图片生成
+   - 使用现代 pathlib 替代 f-string 路径拼接
+
+2. **无需复杂部署**: 
    - 移除 Stable Diffusion 本地部署需求
    - 移除 Whisper 模型下载需求
    - 使用云端 API 服务，开箱即用
