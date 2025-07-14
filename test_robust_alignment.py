@@ -9,11 +9,10 @@ from pathlib import Path
 
 # 添加app模块到路径
 sys.path.insert(0, str(Path(__file__).parent / "app"))
-from app.restore_srt import (
+from app.restore_punct import (
     inject_punct_robust,
     inject_punct_sliding,
     parse_srt,
-    compose_srt,
 )
 
 
