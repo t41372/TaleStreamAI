@@ -131,7 +131,7 @@ async def _refine_shot_prompt(shot: Shot, book_path: Path) -> Shot:
 
 async def _process_single_chunk(
     chunk: str, chapter_index: int, chunk_index: int, num_chunks: int, book_path: Path
-) -> list[Shot]:
+) -> list[Shot] | None:  # 修改返回类型提示
     """处理单个文本块，生成原始Shots列表，并增加重试逻辑。"""
     logger.info(
         f"Processing chunk {chunk_index + 1}/{num_chunks} for chapter {chapter_index}..."
@@ -211,11 +211,10 @@ async def _process_single_chunk(
             
             if attempt < max_retries - 1:
                 await asyncio.sleep(2 * (attempt + 1))  # Exponential backoff
-            else:
-                logger.error(f"All {max_retries} retries failed for chunk {chunk_index + 1}. Skipping.")
-                return []  # All retries failed, return empty list
-    
-    return []  # Should not be reached, but as a fallback
+
+    # 所有重试失败后，返回None而不是空列表
+    logger.error(f"All {max_retries} retries failed for chunk {chunk_index + 1}. Skipping.")
+    return None  # 修改点：返回None表示失败
 
 
 async def _process_chapter_content(chapter: Chapter, book_path: Path) -> list[Shot]:
@@ -234,12 +233,22 @@ async def _process_chapter_content(chapter: Chapter, book_path: Path) -> list[Sh
     ]
     results_per_chunk = await asyncio.gather(*chunk_processing_tasks)
 
-    # Flatten the results from all chunks into a single list of shots
-    proto_shots: list[Shot] = [
-        shot for chunk_result in results_per_chunk for shot in chunk_result
-    ]
+    # -- 新增的健壮性检查 --
+    proto_shots: list[Shot] = []
+    for i, chunk_result in enumerate(results_per_chunk):
+        if chunk_result is None:
+            # 失败不再静默！
+            logger.critical(
+                f"FATAL: Chapter {chapter.index}, chunk {i} failed to process after all retries. "
+                f"This chapter will be incomplete. Please check LLM API or network status."
+            )
+            # 你可以在这里决定是继续生成不完整的视频，还是抛出异常中止整个流程
+            # raise RuntimeError(f"Failed to process chunk {i} of chapter {chapter.index}")
+        else:
+            proto_shots.extend(chunk_result)
 
     if not proto_shots:
+        logger.error(f"No shots could be generated for chapter {chapter.index}.")
         return []
 
     # Step 2: Re-number all shots FIRST to give them unique IDs (MOVED FROM STEP 3)

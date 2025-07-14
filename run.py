@@ -4,12 +4,15 @@ import argparse
 from pathlib import Path
 import os
 import sys
+import aiohttp
 
 from loguru import logger
 
 from app.config import settings
 from app.llm_client import test_llm_connections
 from app.pipeline import Pipeline
+from app.services.image_provider import PollinationsImageGenerator
+from app.services.audio_provider import EdgeTTSAudioGenerator
 
 
 async def main():
@@ -55,13 +58,6 @@ async def main():
         await test_llm_connections()
         return
 
-    # 更新配置以反映命令行参数
-    # (dataclasses 是不可变的, 所以我们创建一个新的)
-    # 技巧：使用 object.__setattr__ 来绕过 frozen=True 的限制进行修改
-    # 但更清晰的方式是在启动时就决定好配置
-    # 这里为了简单，我们假设 settings 已通过 .env 文件配置好，命令行仅用于临时覆盖
-    # 实际生产中可能会用更复杂的配置加载逻辑
-
     # 使用命令行参数来确定 book_id
     final_book_id = args.book_id
     if not final_book_id:
@@ -72,19 +68,28 @@ async def main():
 
     logger.info(f"🚀 工作流启动，书籍ID: {final_book_id}")
 
-    # 初始化并运行流水线
-    pipeline = Pipeline(
-        book_id=final_book_id,
-        source_file=args.source if args.source.endswith(".txt") else None,
-    )
+    # 使用依赖注入模式创建服务实例
+    async with aiohttp.ClientSession() as session:
+        # 创建服务实例并注入依赖
+        image_generator = PollinationsImageGenerator(session)
+        audio_generator = EdgeTTSAudioGenerator()
 
-    try:
-        await pipeline.run()
-    except Exception as e:
-        logger.exception(f"工作流执行过程中发生未捕获的严重错误: {e}")
-    else:
-        # This 'else' block only runs if the 'try' block completes without any exceptions
-        logger.info("🎉 工作流全部阶段成功完成！")
+        # 初始化并运行流水线，注入所有依赖
+        pipeline = Pipeline(
+            book_id=final_book_id,
+            source_file=args.source if args.source.endswith(".txt") else None,
+            session=session,
+            image_generator=image_generator,
+            audio_generator=audio_generator,
+        )
+
+        try:
+            await pipeline.run()
+        except Exception as e:
+            logger.exception(f"工作流执行过程中发生未捕获的严重错误: {e}")
+        else:
+            # This 'else' block only runs if the 'try' block completes without any exceptions
+            logger.info("🎉 工作流全部阶段成功完成！")
 
 
 if __name__ == "__main__":

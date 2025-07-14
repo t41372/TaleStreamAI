@@ -56,36 +56,35 @@ def _parse_chapters_from_html(html_content: str) -> list[dict]:
     return chapters
 
 
-async def _get_remote_chapters(book_id: str, book_path: Path) -> list[Chapter]:
+async def _get_remote_chapters(session: aiohttp.ClientSession, book_id: str, book_path: Path) -> list[Chapter]:
     """从网络获取小说内容。"""
     catalog_url = f"https://www.qidian.com/book/{book_id}/"
     chapters_json_path = book_path / f"{book_id}.json"
     chapters_list_dir = book_path / "list"
     chapters_list_dir.mkdir(exist_ok=True)
 
-    async with aiohttp.ClientSession() as session:
-        catalog_html = await _fetch_url(session, catalog_url)
-        if not catalog_html:
-            return []
+    catalog_html = await _fetch_url(session, catalog_url)
+    if not catalog_html:
+        return []
 
-        chapter_infos = _parse_chapters_from_html(catalog_html)
-        with open(chapters_json_path, "w", encoding="utf-8") as f:
-            json.dump(chapter_infos, f, ensure_ascii=False, indent=2)
+    chapter_infos = _parse_chapters_from_html(catalog_html)
+    with open(chapters_json_path, "w", encoding="utf-8") as f:
+        json.dump(chapter_infos, f, ensure_ascii=False, indent=2)
 
-        tasks = []
-        for i, info in enumerate(chapter_infos):
-            chapter_file = chapters_list_dir / f"{i}.txt"
-            if not chapter_file.exists():
-                tasks.append(
-                    _fetch_and_save_chapter(session, info["url"], chapter_file)
-                )
+    tasks = []
+    for i, info in enumerate(chapter_infos):
+        chapter_file = chapters_list_dir / f"{i}.txt"
+        if not chapter_file.exists():
+            tasks.append(
+                _fetch_and_save_chapter(session, info["url"], chapter_file)
+            )
 
-        results = await asyncio.gather(*tasks)
+    results = await asyncio.gather(*tasks)
 
-        chapters = []
-        for i, content in enumerate(results):
-            if content:
-                chapters.append(Chapter(index=i, content=content))
+    chapters = []
+    for i, content in enumerate(results):
+        if content:
+            chapters.append(Chapter(index=i, content=content))
 
     return chapters
 
@@ -119,28 +118,45 @@ def _get_local_chapters(source_file: str, book_path: Path) -> list[Chapter]:
     chapters_list_dir.mkdir(exist_ok=True)
 
     content = source_path.read_text(encoding="utf-8")
-    # 按 "第X章" 分割，保留分隔符
-    raw_chunks = re.split(r"(第\\d+章.*)", content)
+    # 新的、更通用的正则表达式，能够匹配多种章节标题格式
+    # e.g., "第1章", "第一章", "Chapter 1", "1.", "1"
+    chapter_pattern = re.compile(
+        r"^(?:\s*)(?:第[一二三四五六七八九十百千万\d]+\s*章|Chapter\s*\d+|\d+\.?|\d+)(?:\s+.*)?$",
+        re.MULTILINE,
+    )
+
+    # 使用 finditer 找到所有章节标题的位置
+    titles = list(chapter_pattern.finditer(content))
+    
+    if not titles:
+        logger.warning("未在文件中找到章节标题，将整个文件视为一个章节。")
+        chapter = Chapter(index=0, content=content)
+        (chapters_list_dir / "0.txt").write_text(content, encoding="utf-8")
+        return [chapter]
 
     chapters = []
-    chapter_index = 0
-
-    # 第一个块是标题前的任何内容，通常忽略
-    # 从索引1开始，步长为2，来获取 (标题, 内容) 对
-    for i in range(1, len(raw_chunks), 2):
-        # title = raw_chunks[i].strip()
-        text = raw_chunks[i + 1].strip()
-        if text:
-            chapter = Chapter(index=chapter_index, content=text)
+    for i, match in enumerate(titles):
+        # 跳过标题行，从标题的下一行开始
+        start_pos = match.end()
+        # 寻找换行符，确保从下一行开始
+        newline_pos = content.find('\n', start_pos)
+        if newline_pos != -1:
+            start_pos = newline_pos + 1
+        
+        # 确定章节内容的结束位置
+        end_pos = titles[i + 1].start() if i + 1 < len(titles) else len(content)
+        
+        chapter_content = content[start_pos:end_pos].strip()
+        if chapter_content:
+            chapter = Chapter(index=i, content=chapter_content)
             chapters.append(chapter)
             # 将分割好的章节内容写入文件，以便后续步骤可以统一处理
-            (chapters_list_dir / f"{chapter_index}.txt").write_text(
-                text, encoding="utf-8"
+            (chapters_list_dir / f"{i}.txt").write_text(
+                chapter_content, encoding="utf-8"
             )
-            chapter_index += 1
 
-    if not chapters:  # 如果没有匹配到 "第X章"，则将整个文件视为一章
-        logger.warning("未在文件中找到 '第X章' 格式的章节标题，将整个文件视为一个章节。")
+    if not chapters:
+        logger.warning("解析章节后没有找到有效内容，将整个文件视为一个章节。")
         chapter = Chapter(index=0, content=content)
         chapters.append(chapter)
         (chapters_list_dir / "0.txt").write_text(content, encoding="utf-8")
@@ -149,7 +165,7 @@ def _get_local_chapters(source_file: str, book_path: Path) -> list[Chapter]:
 
 
 async def get_chapters(
-    book_id: str, source_file: Optional[str] = None
+    session: aiohttp.ClientSession, book_id: str, source_file: Optional[str] = None
 ) -> list[Chapter]:
     """
     内容获取阶段的主函数。
@@ -163,4 +179,4 @@ async def get_chapters(
         return _get_local_chapters(source_file, book_path)
     else:
         logger.info(f"从网络获取书籍ID: {book_id}")
-        return await _get_remote_chapters(book_id, book_path)
+        return await _get_remote_chapters(session, book_id, book_path)

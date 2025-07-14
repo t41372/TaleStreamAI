@@ -3,9 +3,12 @@ import asyncio
 import concurrent.futures
 import pickle
 from typing import Optional
+import aiohttp
 
 from .config import settings
 from .stages import content, storyboard, assets, finalizer
+from .services.image_provider import PollinationsImageGenerator
+from .services.audio_provider import EdgeTTSAudioGenerator
 from loguru import logger
 
 
@@ -14,11 +17,23 @@ class Pipeline:
     异步流水线控制器，负责编排整个视频生成过程。
     """
 
-    def __init__(self, book_id: str, source_file: Optional[str] = None):
+    def __init__(
+        self,
+        book_id: str,
+        source_file: Optional[str] = None,
+        session: Optional[aiohttp.ClientSession] = None,
+        image_generator: Optional[PollinationsImageGenerator] = None,
+        audio_generator: Optional[EdgeTTSAudioGenerator] = None,
+    ):
         self.book_id = book_id
         self.source_file = source_file
         self.book_path = settings.paths.get_book_path(book_id)
         self.state_file_path = self.book_path / "progress.pkl"
+        
+        # 依赖注入：接受外部传入的服务实例
+        self.session = session
+        self.image_generator = image_generator
+        self.audio_generator = audio_generator
 
         # 为CPU密集型任务创建一个进程池执行器
         self.process_executor = concurrent.futures.ProcessPoolExecutor()
@@ -62,7 +77,7 @@ class Pipeline:
             logger.info("🔄 未找到有效状态文件，开始全新运行...")
             # --- 阶段 1: 内容获取 ---
             logger.info("🚀 开始执行: 阶段 1: 内容获取")
-            chapters = await content.get_chapters(self.book_id, self.source_file)
+            chapters = await content.get_chapters(self.session, self.book_id, self.source_file)
             if not chapters:
                 logger.error("内容获取失败，流水线终止。")
                 return
@@ -86,9 +101,9 @@ class Pipeline:
 
         # --- 阶段 3: 资产生成 (图片、音频、视频片段) ---
         logger.info("🚀 开始执行: 阶段 3: 并行生成所有资产")
-        # 传递已处理或已加载的shots
+        # 传递已处理或已加载的shots和注入的服务
         shots_after_assets = await assets.generate_all_assets(
-            processed_shots, self.book_path, self.process_executor
+            processed_shots, self.book_path, self.image_generator, self.audio_generator, self.process_executor
         )
         # 第二个检查点：在媒体资产生成后更新状态
         self._save_state(shots_after_assets)

@@ -37,10 +37,10 @@ def _generate_cache_key(func: Callable, *args, **kwargs) -> str:
 def cache(cache_path: Path, result_type: str = "text"):
     """
     一个通用的缓存装饰器，可缓存函数结果到文件。
-    支持文本和二进制两种模式。
+    支持文本、二进制和pickle三种模式。
 
     :param cache_path: 缓存文件的存储目录 (e.g., settings.paths.cache_llm)
-    :param result_type: 'text' 或 'binary'
+    :param result_type: 'text', 'binary', 或 'pickle'
     """
 
     def decorator(func: Callable) -> Callable:
@@ -56,6 +56,8 @@ def cache(cache_path: Path, result_type: str = "text"):
                 )
                 if result_type == "binary":
                     return cache_file.read_bytes()
+                elif result_type == "pickle":
+                    return pickle.loads(cache_file.read_bytes())
                 else:
                     return cache_file.read_text(encoding="utf-8")
 
@@ -70,6 +72,8 @@ def cache(cache_path: Path, result_type: str = "text"):
                 cache_path.mkdir(parents=True, exist_ok=True)
                 if result_type == "binary":
                     cache_file.write_bytes(result)
+                elif result_type == "pickle":
+                    cache_file.write_bytes(pickle.dumps(result))
                 else:
                     cache_file.write_text(str(result), encoding="utf-8")
                 logger.debug(f"📝 结果已缓存至: {cache_file}")

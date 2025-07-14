@@ -80,6 +80,7 @@ This section contains the contents of the repository's files.
 # app/services/audio_provider.py
 import edge_tts
 from loguru import logger
+from edge_tts import SubMaker
 
 from .base import AudioGenerator
 from ..config import settings
@@ -89,15 +90,25 @@ from ..cache import cache
 class EdgeTTSAudioGenerator(AudioGenerator):
     """使用 Microsoft Edge TTS 的音频生成器实现。"""
 
-    @cache(settings.paths.cache_audio, "binary")
-    async def generate(self, text: str, voice: str) -> bytes:
+    @cache(settings.paths.cache_audio, "pickle")
+    async def generate(self, text: str, voice: str) -> tuple[bytes, str]:
+        """
+        生成音频数据和SRT格式的字幕字符串。
+        :return: (音频二进制数据, SRT字幕字符串)
+        """
         try:
             communicate = edge_tts.Communicate(text, voice)
+            sub_maker = SubMaker()
             audio_data = b""
+            
             async for chunk in communicate.stream():
                 if chunk["type"] == "audio":
                     audio_data += chunk["data"]
-            return audio_data
+                elif chunk["type"] == "WordBoundary":
+                    sub_maker.feed(chunk)
+
+            srt_content = sub_maker.get_srt()
+            return audio_data, srt_content
         except Exception as e:
             logger.error(f"Edge-TTS generation failed for text '{text[:30]}...': {e}")
             raise
@@ -128,13 +139,13 @@ class AudioGenerator(ABC):
     """音频生成器的抽象基类接口。"""
 
     @abstractmethod
-    async def generate(self, text: str, voice: str) -> bytes:
+    async def generate(self, text: str, voice: str) -> tuple[bytes, str]:
         """
-        根据给定的文本和语音生成音频数据。
+        根据给定的文本和语音生成音频数据和SRT字幕。
 
         :param text: 要转换为语音的文本。
         :param voice: 使用的语音名称。
-        :return: 音频的二进制数据 (e.g., MP3)。
+        :return: 一个元组 (音频的二进制数据, SRT字幕字符串)。
         :raises Exception: 如果生成失败。
         """
         pass
@@ -155,8 +166,9 @@ from ..cache import cache
 class PollinationsImageGenerator(ImageGenerator):
     """使用 Pollinations.ai API 的图像生成器实现。"""
 
-    def __init__(self):
+    def __init__(self, session: aiohttp.ClientSession):
         self.semaphore = asyncio.Semaphore(settings.image_threads)
+        self._session = session
 
     @cache(settings.paths.cache_image, "binary")
     async def generate(self, prompt: str) -> bytes:
@@ -167,17 +179,16 @@ class PollinationsImageGenerator(ImageGenerator):
                 f"?width={settings.image_width}&height={settings.image_height}&nologo=true&model=flux"
             )
 
-            async with aiohttp.ClientSession() as session:
-                try:
-                    logger.debug(f"Requesting image from URL: {url.split('?')[0]}...")
-                    async with session.get(url, timeout=300) as response:
-                        response.raise_for_status()
-                        return await response.read()
-                except aiohttp.ClientError as e:
-                    logger.error(
-                        f"Image generation API request failed for prompt '{prompt[:30]}...': {e}"
-                    )
-                    raise
+            try:
+                logger.debug(f"Requesting image from URL: {url.split('?')[0]}...")
+                async with self._session.get(url, timeout=300) as response:
+                    response.raise_for_status()
+                    return await response.read()
+            except aiohttp.ClientError as e:
+                logger.error(
+                    f"Image generation API request failed for prompt '{prompt[:30]}...': {e}"
+                )
+                raise
 </file>
 
 <file path=".env_old">
@@ -473,36 +484,35 @@ def _parse_chapters_from_html(html_content: str) -> list[dict]:
     return chapters
 
 
-async def _get_remote_chapters(book_id: str, book_path: Path) -> list[Chapter]:
+async def _get_remote_chapters(session: aiohttp.ClientSession, book_id: str, book_path: Path) -> list[Chapter]:
     """从网络获取小说内容。"""
     catalog_url = f"https://www.qidian.com/book/{book_id}/"
     chapters_json_path = book_path / f"{book_id}.json"
     chapters_list_dir = book_path / "list"
     chapters_list_dir.mkdir(exist_ok=True)
 
-    async with aiohttp.ClientSession() as session:
-        catalog_html = await _fetch_url(session, catalog_url)
-        if not catalog_html:
-            return []
+    catalog_html = await _fetch_url(session, catalog_url)
+    if not catalog_html:
+        return []
 
-        chapter_infos = _parse_chapters_from_html(catalog_html)
-        with open(chapters_json_path, "w", encoding="utf-8") as f:
-            json.dump(chapter_infos, f, ensure_ascii=False, indent=2)
+    chapter_infos = _parse_chapters_from_html(catalog_html)
+    with open(chapters_json_path, "w", encoding="utf-8") as f:
+        json.dump(chapter_infos, f, ensure_ascii=False, indent=2)
 
-        tasks = []
-        for i, info in enumerate(chapter_infos):
-            chapter_file = chapters_list_dir / f"{i}.txt"
-            if not chapter_file.exists():
-                tasks.append(
-                    _fetch_and_save_chapter(session, info["url"], chapter_file)
-                )
+    tasks = []
+    for i, info in enumerate(chapter_infos):
+        chapter_file = chapters_list_dir / f"{i}.txt"
+        if not chapter_file.exists():
+            tasks.append(
+                _fetch_and_save_chapter(session, info["url"], chapter_file)
+            )
 
-        results = await asyncio.gather(*tasks)
+    results = await asyncio.gather(*tasks)
 
-        chapters = []
-        for i, content in enumerate(results):
-            if content:
-                chapters.append(Chapter(index=i, content=content))
+    chapters = []
+    for i, content in enumerate(results):
+        if content:
+            chapters.append(Chapter(index=i, content=content))
 
     return chapters
 
@@ -536,28 +546,45 @@ def _get_local_chapters(source_file: str, book_path: Path) -> list[Chapter]:
     chapters_list_dir.mkdir(exist_ok=True)
 
     content = source_path.read_text(encoding="utf-8")
-    # 按 "第X章" 分割，保留分隔符
-    raw_chunks = re.split(r"(第\\d+章.*)", content)
+    # 新的、更通用的正则表达式，能够匹配多种章节标题格式
+    # e.g., "第1章", "第一章", "Chapter 1", "1.", "1"
+    chapter_pattern = re.compile(
+        r"^(?:\s*)(?:第[一二三四五六七八九十百千万\d]+\s*章|Chapter\s*\d+|\d+\.?|\d+)(?:\s+.*)?$",
+        re.MULTILINE,
+    )
+
+    # 使用 finditer 找到所有章节标题的位置
+    titles = list(chapter_pattern.finditer(content))
+    
+    if not titles:
+        logger.warning("未在文件中找到章节标题，将整个文件视为一个章节。")
+        chapter = Chapter(index=0, content=content)
+        (chapters_list_dir / "0.txt").write_text(content, encoding="utf-8")
+        return [chapter]
 
     chapters = []
-    chapter_index = 0
-
-    # 第一个块是标题前的任何内容，通常忽略
-    # 从索引1开始，步长为2，来获取 (标题, 内容) 对
-    for i in range(1, len(raw_chunks), 2):
-        # title = raw_chunks[i].strip()
-        text = raw_chunks[i + 1].strip()
-        if text:
-            chapter = Chapter(index=chapter_index, content=text)
+    for i, match in enumerate(titles):
+        # 跳过标题行，从标题的下一行开始
+        start_pos = match.end()
+        # 寻找换行符，确保从下一行开始
+        newline_pos = content.find('\n', start_pos)
+        if newline_pos != -1:
+            start_pos = newline_pos + 1
+        
+        # 确定章节内容的结束位置
+        end_pos = titles[i + 1].start() if i + 1 < len(titles) else len(content)
+        
+        chapter_content = content[start_pos:end_pos].strip()
+        if chapter_content:
+            chapter = Chapter(index=i, content=chapter_content)
             chapters.append(chapter)
             # 将分割好的章节内容写入文件，以便后续步骤可以统一处理
-            (chapters_list_dir / f"{chapter_index}.txt").write_text(
-                text, encoding="utf-8"
+            (chapters_list_dir / f"{i}.txt").write_text(
+                chapter_content, encoding="utf-8"
             )
-            chapter_index += 1
 
-    if not chapters:  # 如果没有匹配到 "第X章"，则将整个文件视为一章
-        logger.warning("未在文件中找到 '第X章' 格式的章节标题，将整个文件视为一个章节。")
+    if not chapters:
+        logger.warning("解析章节后没有找到有效内容，将整个文件视为一个章节。")
         chapter = Chapter(index=0, content=content)
         chapters.append(chapter)
         (chapters_list_dir / "0.txt").write_text(content, encoding="utf-8")
@@ -566,7 +593,7 @@ def _get_local_chapters(source_file: str, book_path: Path) -> list[Chapter]:
 
 
 async def get_chapters(
-    book_id: str, source_file: Optional[str] = None
+    session: aiohttp.ClientSession, book_id: str, source_file: Optional[str] = None
 ) -> list[Chapter]:
     """
     内容获取阶段的主函数。
@@ -580,7 +607,161 @@ async def get_chapters(
         return _get_local_chapters(source_file, book_path)
     else:
         logger.info(f"从网络获取书籍ID: {book_id}")
-        return await _get_remote_chapters(book_id, book_path)
+        return await _get_remote_chapters(session, book_id, book_path)
+</file>
+
+<file path="app/models.py">
+# app/models.py
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Optional
+
+
+@dataclass
+class Shot:
+    """
+    表示一个独立的分镜（或镜头）。
+    这是我们流水线中处理的基本工作单元。
+    """
+
+    # 核心内容
+    shot_id: int
+    chapter_index: int
+    original_text: str
+
+    # 生成的数据 (最终使用的提示词)
+    image_prompt: Optional[str] = None
+
+    # 生成的资产路径
+    storyboard_path: Optional[Path] = None  # 指向分镜脚本JSON文件的路径
+    refined_prompt_path: Optional[Path] = None  # 指向优化后的提示词TXT文件的路径
+    image_path: Optional[Path] = None
+    audio_path: Optional[Path] = None
+    srt_path: Optional[Path] = None
+    video_clip_path: Optional[Path] = None
+
+    # 状态
+    error: Optional[str] = None
+
+    def get_full_id(self) -> str:
+        """返回唯一的镜头ID，格式为 '章节-镜头'"""
+        return f"{self.chapter_index}-{self.shot_id}"
+
+
+@dataclass
+class Chapter:
+    """表示一个完整的章节，包含多个分镜。"""
+
+    index: int
+    content: str
+    shots: list[Shot] = field(default_factory=list)
+</file>
+
+<file path=".gitignore">
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+data
+
+.mp4
+.env
+
+prompt_history
+</file>
+
+<file path="app/cache.py">
+# app/cache.py
+import json
+import pickle
+import hashlib
+from pathlib import Path
+from typing import Callable
+from functools import wraps
+
+from .config import settings
+from loguru import logger
+
+
+def _generate_cache_key(func: Callable, *args, **kwargs) -> str:
+    """根据函数和参数生成一个确定性的哈希键"""
+    # 将args和kwargs合并并排序，以确保确定性
+    # 使用json.dumps进行序列化，可以处理大部分内置类型
+    # sort_keys=True保证了字典键的顺序
+    # default=str处理了无法直接序列化为JSON的对象（如Path对象）
+    try:
+        payload = {
+            "args": args,
+            "kwargs": kwargs,
+        }
+        serialized_data = json.dumps(payload, sort_keys=True, default=str).encode(
+            "utf-8"
+        )
+    except TypeError:
+        # 对于更复杂或不可序列化为JSON的对象，使用pickle作为后备方案
+        # 注意：pickle的输出可能因Python版本而异，但对于一个稳定环境是可靠的
+        payload = (args, kwargs)
+        serialized_data = pickle.dumps(payload)
+
+    # 使用SHA256生成哈希值
+    return hashlib.sha256(serialized_data).hexdigest()
+
+
+def cache(cache_path: Path, result_type: str = "text"):
+    """
+    一个通用的缓存装饰器，可缓存函数结果到文件。
+    支持文本、二进制和pickle三种模式。
+
+    :param cache_path: 缓存文件的存储目录 (e.g., settings.paths.cache_llm)
+    :param result_type: 'text', 'binary', 或 'pickle'
+    """
+
+    def decorator(func: Callable) -> Callable:
+        @wraps(func)
+        async def wrapper(*args, **kwargs):
+            cache_key = _generate_cache_key(func, *args, **kwargs)
+            cache_file = cache_path / f"{func.__name__}_{cache_key}"
+
+            # 检查缓存是否存在
+            if cache_file.exists():
+                logger.debug(
+                    f"✅ 缓存命中: {func.__name__} (key: {cache_key[:8]}...), 从 {cache_file} 读取"
+                )
+                if result_type == "binary":
+                    return cache_file.read_bytes()
+                elif result_type == "pickle":
+                    return pickle.loads(cache_file.read_bytes())
+                else:
+                    return cache_file.read_text(encoding="utf-8")
+
+            # 执行函数并获取结果
+            logger.debug(
+                f"❌ 缓存未命中: {func.__name__} (key: {cache_key[:8]}...), 执行函数"
+            )
+            result = await func(*args, **kwargs)
+
+            # 保存结果到缓存
+            if result is not None:
+                cache_path.mkdir(parents=True, exist_ok=True)
+                if result_type == "binary":
+                    cache_file.write_bytes(result)
+                elif result_type == "pickle":
+                    cache_file.write_bytes(pickle.dumps(result))
+                else:
+                    cache_file.write_text(str(result), encoding="utf-8")
+                logger.debug(f"📝 结果已缓存至: {cache_file}")
+
+            return result
+
+        return wrapper
+
+    return decorator
 </file>
 
 <file path="app/ffmpeg_utils.py">
@@ -696,70 +877,236 @@ def get_ffmpeg_gpu_params():
     }
 </file>
 
-<file path="app/models.py">
-# app/models.py
-from dataclasses import dataclass, field
-from pathlib import Path
+<file path="app/pipeline.py">
+# app/pipeline.py
+import asyncio
+import concurrent.futures
+import pickle
 from typing import Optional
+import aiohttp
+
+from .config import settings
+from .stages import content, storyboard, assets, finalizer
+from .services.image_provider import PollinationsImageGenerator
+from .services.audio_provider import EdgeTTSAudioGenerator
+from loguru import logger
 
 
-@dataclass
-class Shot:
+class Pipeline:
     """
-    表示一个独立的分镜（或镜头）。
-    这是我们流水线中处理的基本工作单元。
+    异步流水线控制器，负责编排整个视频生成过程。
     """
 
-    # 核心内容
-    shot_id: int
-    chapter_index: int
-    original_text: str
+    def __init__(
+        self,
+        book_id: str,
+        source_file: Optional[str] = None,
+        session: Optional[aiohttp.ClientSession] = None,
+        image_generator: Optional[PollinationsImageGenerator] = None,
+        audio_generator: Optional[EdgeTTSAudioGenerator] = None,
+    ):
+        self.book_id = book_id
+        self.source_file = source_file
+        self.book_path = settings.paths.get_book_path(book_id)
+        self.state_file_path = self.book_path / "progress.pkl"
+        
+        # 依赖注入：接受外部传入的服务实例
+        self.session = session
+        self.image_generator = image_generator
+        self.audio_generator = audio_generator
 
-    # 生成的数据 (最终使用的提示词)
-    image_prompt: Optional[str] = None
+        # 为CPU密集型任务创建一个进程池执行器
+        self.process_executor = concurrent.futures.ProcessPoolExecutor()
 
-    # 生成的资产路径
-    storyboard_path: Optional[Path] = None  # 指向分镜脚本JSON文件的路径
-    refined_prompt_path: Optional[Path] = None  # 指向优化后的提示词TXT文件的路径
-    image_path: Optional[Path] = None
-    audio_path: Optional[Path] = None
-    srt_path: Optional[Path] = None
-    video_clip_path: Optional[Path] = None
+    def _save_state(self, shots: list):
+        """将当前的所有Shots状态序列化到文件。"""
+        try:
+            with open(self.state_file_path, "wb") as f:
+                pickle.dump(shots, f)
+            logger.info(f"💾 流水线状态已保存至: {self.state_file_path}")
+        except Exception as e:
+            logger.error(f"保存状态失败: {e}")
 
-    # 状态
-    error: Optional[str] = None
+    def _load_state(self) -> Optional[list]:
+        """从文件加载并反序列化Shots状态。"""
+        if not self.state_file_path.exists():
+            return None
+        try:
+            with open(self.state_file_path, "rb") as f:
+                shots = pickle.load(f)
+            logger.info(f"✅ 成功从 {self.state_file_path} 加载状态，即将恢复运行...")
+            return shots
+        except (pickle.UnpicklingError, EOFError, FileNotFoundError) as e:
+            logger.warning(f"无法加载状态文件 (可能已损坏或为空)，将重新开始: {e}")
+            self.state_file_path.unlink(missing_ok=True) # 删除损坏的文件
+            return None
+            
+    def _cleanup_state_file(self):
+        """在流水线成功完成后清理状态文件。"""
+        self.state_file_path.unlink(missing_ok=True)
+        logger.info("🧹 状态文件已清理。")
 
-    def get_full_id(self) -> str:
-        """返回唯一的镜头ID，格式为 '章节-镜头'"""
-        return f"{self.chapter_index}-{self.shot_id}"
+    async def run(self):
+        """按顺序执行流水线的各个阶段"""
+        start_time = asyncio.get_event_loop().time()
 
+        # --- 尝试加载状态，实现断点续传 ---
+        processed_shots = self._load_state()
 
-@dataclass
-class Chapter:
-    """表示一个完整的章节，包含多个分镜。"""
+        if processed_shots is None:
+            logger.info("🔄 未找到有效状态文件，开始全新运行...")
+            # --- 阶段 1: 内容获取 ---
+            logger.info("🚀 开始执行: 阶段 1: 内容获取")
+            chapters = await content.get_chapters(self.session, self.book_id, self.source_file)
+            if not chapters:
+                logger.error("内容获取失败，流水线终止。")
+                return
+            logger.info(f"✅ 完成: 阶段 1: 内容获取 | 获取到 {len(chapters)} 个章节")
+    
+            # --- 阶段 2: 分镜与提示词生成 (并发) ---
+            logger.info("🚀 开始执行: 阶段 2: 生成分镜与提示词")
+            all_shots = await storyboard.create_storyboard_for_chapters(chapters, self.book_path)
+            if not all_shots:
+                logger.error("分镜生成失败，流水线终止。")
+                return
+            logger.info(
+                f"✅ 完成: 阶段 2: 生成分镜与提示词 | 共生成 {len(all_shots)} 个分镜"
+            )
+            
+            # 第一个检查点：在LLM密集型任务后保存状态
+            self._save_state(all_shots)
+            processed_shots = all_shots
+        else:
+            logger.info(f"✅ 成功恢复运行，已加载 {len(processed_shots)} 个镜头的先前状态。")
 
-    index: int
-    content: str
-    shots: list[Shot] = field(default_factory=list)
+        # --- 阶段 3: 资产生成 (图片、音频、视频片段) ---
+        logger.info("🚀 开始执行: 阶段 3: 并行生成所有资产")
+        # 传递已处理或已加载的shots和注入的服务
+        shots_after_assets = await assets.generate_all_assets(
+            processed_shots, self.book_path, self.image_generator, self.audio_generator, self.process_executor
+        )
+        # 第二个检查点：在媒体资产生成后更新状态
+        self._save_state(shots_after_assets)
+        
+        successful_shots = [shot for shot in shots_after_assets if not shot.error]
+        if not successful_shots:
+            logger.error("所有资产生成失败，流水线终止。")
+            return
+        logger.info(
+            f"✅ 完成: 阶段 3: 并行生成所有资产 | 成功处理 {len(successful_shots)}/{len(shots_after_assets)} 个镜头"
+        )
+
+        # --- 阶段 4: 最终合成 ---
+        logger.info("🚀 开始执行: 阶段 4: 合成最终视频")
+        await finalizer.merge_video_clips(self.book_id, successful_shots)
+        logger.info("✅ 完成: 阶段 4: 合成最终视频")
+
+        end_time = asyncio.get_event_loop().time()
+        logger.info(f"流水线总耗时: {end_time - start_time:.2f} 秒")
+
+        # --- 清理 ---
+        self._cleanup_state_file()
+        # 优雅地关闭进程池
+        self.process_executor.shutdown()
 </file>
 
-<file path=".gitignore">
-# Python-generated files
-__pycache__/
-*.py[oc]
-build/
-dist/
-wheels/
-*.egg-info
+<file path="run.py">
+# run.py
+import asyncio
+import argparse
+from pathlib import Path
+import os
+import sys
+import aiohttp
 
-# Virtual environments
-.venv
-data
+from loguru import logger
 
-.mp4
-.env
+from app.config import settings
+from app.llm_client import test_llm_connections
+from app.pipeline import Pipeline
+from app.services.image_provider import PollinationsImageGenerator
+from app.services.audio_provider import EdgeTTSAudioGenerator
 
-prompt_history
+
+async def main():
+    """主异步函数，协调整个工作流"""
+    # --- Loguru Configuration ---
+    logger.remove()
+    log_level = "DEBUG" if os.getenv("VERBOSE_LOGGING", "true").lower() == "true" else "INFO"
+    logger.add(
+        sys.stderr,
+        level=log_level,
+        format=(
+            "<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> | "
+            "<level>{level: <8}</level> | "
+            "<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>"
+        ),
+        colorize=True,
+    )
+    # --- End Loguru Configuration ---
+
+    parser = argparse.ArgumentParser(
+        description="TaleStreamAI - 自动化小说转视频工作流"
+    )
+    parser.add_argument(
+        "source",
+        nargs="?",
+        default=settings.book_source,
+        help=f"书籍来源：可以是起点ID或本地.txt文件路径 (默认为: {settings.book_source})",
+    )
+    parser.add_argument(
+        "--book_id",
+        default=settings.custom_book_id,
+        help="为本地文件指定一个自定义的书籍ID (默认为文件名)",
+    )
+    parser.add_argument(
+        "--test-connections",
+        action="store_true",
+        help="仅运行API连接测试后退出",
+    )
+
+    args = parser.parse_args()
+
+    if args.test_connections:
+        await test_llm_connections()
+        return
+
+    # 使用命令行参数来确定 book_id
+    final_book_id = args.book_id
+    if not final_book_id:
+        if args.source.endswith(".txt"):
+            final_book_id = Path(args.source).stem
+        else:
+            final_book_id = args.source
+
+    logger.info(f"🚀 工作流启动，书籍ID: {final_book_id}")
+
+    # 使用依赖注入模式创建服务实例
+    async with aiohttp.ClientSession() as session:
+        # 创建服务实例并注入依赖
+        image_generator = PollinationsImageGenerator(session)
+        audio_generator = EdgeTTSAudioGenerator()
+
+        # 初始化并运行流水线，注入所有依赖
+        pipeline = Pipeline(
+            book_id=final_book_id,
+            source_file=args.source if args.source.endswith(".txt") else None,
+            session=session,
+            image_generator=image_generator,
+            audio_generator=audio_generator,
+        )
+
+        try:
+            await pipeline.run()
+        except Exception as e:
+            logger.exception(f"工作流执行过程中发生未捕获的严重错误: {e}")
+        else:
+            # This 'else' block only runs if the 'try' block completes without any exceptions
+            logger.info("🎉 工作流全部阶段成功完成！")
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
 </file>
 
 <file path="app/stages/assets.py">
@@ -784,13 +1131,11 @@ from ..services.image_provider import PollinationsImageGenerator
 from ..services.audio_provider import EdgeTTSAudioGenerator
 from ..ffmpeg_utils import get_ffmpeg_gpu_params
 
-# Instantiate service providers
-image_generator = PollinationsImageGenerator()
-audio_generator = EdgeTTSAudioGenerator()
+# Service providers will be injected via dependency injection
 
 
 # --- Image Generation (Now uses the service provider) ---
-async def _generate_image_asset(shot: Shot, book_path: Path) -> Shot:
+async def _generate_image_asset(shot: Shot, book_path: Path, image_generator: PollinationsImageGenerator) -> Shot:
     """生成单个镜头的图片资产"""
     if shot.error:
         return shot
@@ -820,33 +1165,44 @@ async def _generate_image_asset(shot: Shot, book_path: Path) -> Shot:
 
 
 # --- Audio Generation (Now uses the service provider) ---
-async def _generate_audio_asset(shot: Shot, book_path: Path) -> Shot:
-    """生成单个镜头的音频资产"""
+async def _generate_audio_asset(shot: Shot, book_path: Path, audio_generator: EdgeTTSAudioGenerator) -> Shot:
+    """生成单个镜头的音频和SRT字幕资产"""
     if shot.error:
         return shot
 
     audio_dir = book_path / "audio" / str(shot.chapter_index)
     audio_dir.mkdir(parents=True, exist_ok=True)
     shot.audio_path = audio_dir / f"{shot.shot_id}.mp3"
-    shot.srt_path = shot.audio_path.with_suffix(".srt")  # srt logic to be added later
+    shot.srt_path = shot.audio_path.with_suffix(".srt")
 
-    if shot.audio_path.exists():
-        logger.debug(f"Audio already exists for shot {shot.get_full_id()}, skipping generation.")
+    if shot.audio_path.exists() and shot.srt_path.exists() and shot.srt_path.stat().st_size > 0:
+        logger.debug(f"Audio and SRT already exist for shot {shot.get_full_id()}, skipping generation.")
         return shot
 
-    logger.debug(f"Generating audio for shot {shot.get_full_id()}...")
+    logger.debug(f"Generating audio and SRT for shot {shot.get_full_id()}...")
     try:
         if not shot.original_text:
             raise ValueError("Original text for audio is missing.")
 
-        audio_data = await audio_generator.generate(shot.original_text, settings.edge_tts_voice)
+        # 调用新版方法，解包返回的元组
+        audio_data, srt_content = await audio_generator.generate(
+            shot.original_text, settings.edge_tts_voice
+        )
 
         shot.audio_path.write_bytes(audio_data)
-        # Placeholder for srt generation
-        shot.srt_path.write_text("")
+        
+        # 写入真实的SRT内容
+        if srt_content:
+            shot.srt_path.write_text(srt_content, encoding="utf-8")
+            logger.debug(f"SRT file generated for shot {shot.get_full_id()}.")
+        else:
+            # 作为后备，如果没生成字幕，也创建一个空文件，避免后续流程出错
+            shot.srt_path.write_text("", encoding="utf-8")
+            logger.warning(f"No SRT content generated for shot {shot.get_full_id()}.")
+
     except Exception as e:
-        shot.error = f"Audio generation failed: {e}"
-        logger.error(f"Shot {shot.get_full_id()} failed during audio generation: {e}")
+        shot.error = f"Audio/SRT generation failed: {e}"
+        logger.error(f"Shot {shot.get_full_id()} failed during audio/SRT generation: {e}")
 
     return shot
 
@@ -930,7 +1286,7 @@ def _generate_video_clip_asset_sync(shot: Shot, book_path: Path) -> Shot:
 
 # --- Main Orchestrator ---
 async def generate_all_assets(
-    shots: list[Shot], book_path: Path, process_executor: ProcessPoolExecutor
+    shots: list[Shot], book_path: Path, image_generator: PollinationsImageGenerator, audio_generator: EdgeTTSAudioGenerator, process_executor: ProcessPoolExecutor
 ) -> list[Shot]:
     """
     资产生成阶段的主函数。
@@ -942,8 +1298,8 @@ async def generate_all_assets(
     )
 
     # We create image and audio tasks separately to handle potential errors gracefully
-    image_tasks = [_generate_image_asset(shot, book_path) for shot in shots]
-    audio_tasks = [_generate_audio_asset(shot, book_path) for shot in shots]
+    image_tasks = [_generate_image_asset(shot, book_path, image_generator) for shot in shots]
+    audio_tasks = [_generate_audio_asset(shot, book_path, audio_generator) for shot in shots]
 
     # Await both sets of I/O tasks
     await asyncio.gather(*image_tasks, *audio_tasks)
@@ -966,302 +1322,6 @@ async def generate_all_assets(
     processed_shots = await asyncio.gather(*cpu_tasks)
 
     return list(processed_shots)
-</file>
-
-<file path="app/cache.py">
-# app/cache.py
-import json
-import pickle
-import hashlib
-from pathlib import Path
-from typing import Callable
-from functools import wraps
-
-from .config import settings
-from loguru import logger
-
-
-def _generate_cache_key(func: Callable, *args, **kwargs) -> str:
-    """根据函数和参数生成一个确定性的哈希键"""
-    # 将args和kwargs合并并排序，以确保确定性
-    # 使用json.dumps进行序列化，可以处理大部分内置类型
-    # sort_keys=True保证了字典键的顺序
-    # default=str处理了无法直接序列化为JSON的对象（如Path对象）
-    try:
-        payload = {
-            "args": args,
-            "kwargs": kwargs,
-        }
-        serialized_data = json.dumps(payload, sort_keys=True, default=str).encode(
-            "utf-8"
-        )
-    except TypeError:
-        # 对于更复杂或不可序列化为JSON的对象，使用pickle作为后备方案
-        # 注意：pickle的输出可能因Python版本而异，但对于一个稳定环境是可靠的
-        payload = (args, kwargs)
-        serialized_data = pickle.dumps(payload)
-
-    # 使用SHA256生成哈希值
-    return hashlib.sha256(serialized_data).hexdigest()
-
-
-def cache(cache_path: Path, result_type: str = "text"):
-    """
-    一个通用的缓存装饰器，可缓存函数结果到文件。
-    支持文本和二进制两种模式。
-
-    :param cache_path: 缓存文件的存储目录 (e.g., settings.paths.cache_llm)
-    :param result_type: 'text' 或 'binary'
-    """
-
-    def decorator(func: Callable) -> Callable:
-        @wraps(func)
-        async def wrapper(*args, **kwargs):
-            cache_key = _generate_cache_key(func, *args, **kwargs)
-            cache_file = cache_path / f"{func.__name__}_{cache_key}"
-
-            # 检查缓存是否存在
-            if cache_file.exists():
-                logger.debug(
-                    f"✅ 缓存命中: {func.__name__} (key: {cache_key[:8]}...), 从 {cache_file} 读取"
-                )
-                if result_type == "binary":
-                    return cache_file.read_bytes()
-                else:
-                    return cache_file.read_text(encoding="utf-8")
-
-            # 执行函数并获取结果
-            logger.debug(
-                f"❌ 缓存未命中: {func.__name__} (key: {cache_key[:8]}...), 执行函数"
-            )
-            result = await func(*args, **kwargs)
-
-            # 保存结果到缓存
-            if result is not None:
-                cache_path.mkdir(parents=True, exist_ok=True)
-                if result_type == "binary":
-                    cache_file.write_bytes(result)
-                else:
-                    cache_file.write_text(str(result), encoding="utf-8")
-                logger.debug(f"📝 结果已缓存至: {cache_file}")
-
-            return result
-
-        return wrapper
-
-    return decorator
-</file>
-
-<file path="app/pipeline.py">
-# app/pipeline.py
-import asyncio
-import concurrent.futures
-import pickle
-from typing import Optional
-
-from .config import settings
-from .stages import content, storyboard, assets, finalizer
-from loguru import logger
-
-
-class Pipeline:
-    """
-    异步流水线控制器，负责编排整个视频生成过程。
-    """
-
-    def __init__(self, book_id: str, source_file: Optional[str] = None):
-        self.book_id = book_id
-        self.source_file = source_file
-        self.book_path = settings.paths.get_book_path(book_id)
-        self.state_file_path = self.book_path / "progress.pkl"
-
-        # 为CPU密集型任务创建一个进程池执行器
-        self.process_executor = concurrent.futures.ProcessPoolExecutor()
-
-    def _save_state(self, shots: list):
-        """将当前的所有Shots状态序列化到文件。"""
-        try:
-            with open(self.state_file_path, "wb") as f:
-                pickle.dump(shots, f)
-            logger.info(f"💾 流水线状态已保存至: {self.state_file_path}")
-        except Exception as e:
-            logger.error(f"保存状态失败: {e}")
-
-    def _load_state(self) -> Optional[list]:
-        """从文件加载并反序列化Shots状态。"""
-        if not self.state_file_path.exists():
-            return None
-        try:
-            with open(self.state_file_path, "rb") as f:
-                shots = pickle.load(f)
-            logger.info(f"✅ 成功从 {self.state_file_path} 加载状态，即将恢复运行...")
-            return shots
-        except (pickle.UnpicklingError, EOFError, FileNotFoundError) as e:
-            logger.warning(f"无法加载状态文件 (可能已损坏或为空)，将重新开始: {e}")
-            self.state_file_path.unlink(missing_ok=True) # 删除损坏的文件
-            return None
-            
-    def _cleanup_state_file(self):
-        """在流水线成功完成后清理状态文件。"""
-        self.state_file_path.unlink(missing_ok=True)
-        logger.info("🧹 状态文件已清理。")
-
-    async def run(self):
-        """按顺序执行流水线的各个阶段"""
-        start_time = asyncio.get_event_loop().time()
-
-        # --- 尝试加载状态，实现断点续传 ---
-        processed_shots = self._load_state()
-
-        if processed_shots is None:
-            logger.info("🔄 未找到有效状态文件，开始全新运行...")
-            # --- 阶段 1: 内容获取 ---
-            logger.info("🚀 开始执行: 阶段 1: 内容获取")
-            chapters = await content.get_chapters(self.book_id, self.source_file)
-            if not chapters:
-                logger.error("内容获取失败，流水线终止。")
-                return
-            logger.info(f"✅ 完成: 阶段 1: 内容获取 | 获取到 {len(chapters)} 个章节")
-    
-            # --- 阶段 2: 分镜与提示词生成 (并发) ---
-            logger.info("🚀 开始执行: 阶段 2: 生成分镜与提示词")
-            all_shots = await storyboard.create_storyboard_for_chapters(chapters, self.book_path)
-            if not all_shots:
-                logger.error("分镜生成失败，流水线终止。")
-                return
-            logger.info(
-                f"✅ 完成: 阶段 2: 生成分镜与提示词 | 共生成 {len(all_shots)} 个分镜"
-            )
-            
-            # 第一个检查点：在LLM密集型任务后保存状态
-            self._save_state(all_shots)
-            processed_shots = all_shots
-        else:
-            logger.info(f"✅ 成功恢复运行，已加载 {len(processed_shots)} 个镜头的先前状态。")
-
-        # --- 阶段 3: 资产生成 (图片、音频、视频片段) ---
-        logger.info("🚀 开始执行: 阶段 3: 并行生成所有资产")
-        # 传递已处理或已加载的shots
-        shots_after_assets = await assets.generate_all_assets(
-            processed_shots, self.book_path, self.process_executor
-        )
-        # 第二个检查点：在媒体资产生成后更新状态
-        self._save_state(shots_after_assets)
-        
-        successful_shots = [shot for shot in shots_after_assets if not shot.error]
-        if not successful_shots:
-            logger.error("所有资产生成失败，流水线终止。")
-            return
-        logger.info(
-            f"✅ 完成: 阶段 3: 并行生成所有资产 | 成功处理 {len(successful_shots)}/{len(shots_after_assets)} 个镜头"
-        )
-
-        # --- 阶段 4: 最终合成 ---
-        logger.info("🚀 开始执行: 阶段 4: 合成最终视频")
-        await finalizer.merge_video_clips(self.book_id, successful_shots)
-        logger.info("✅ 完成: 阶段 4: 合成最终视频")
-
-        end_time = asyncio.get_event_loop().time()
-        logger.info(f"流水线总耗时: {end_time - start_time:.2f} 秒")
-
-        # --- 清理 ---
-        self._cleanup_state_file()
-        # 优雅地关闭进程池
-        self.process_executor.shutdown()
-</file>
-
-<file path="run.py">
-# run.py
-import asyncio
-import argparse
-from pathlib import Path
-import os
-import sys
-
-from loguru import logger
-
-from app.config import settings
-from app.llm_client import test_llm_connections
-from app.pipeline import Pipeline
-
-
-async def main():
-    """主异步函数，协调整个工作流"""
-    # --- Loguru Configuration ---
-    logger.remove()
-    log_level = "DEBUG" if os.getenv("VERBOSE_LOGGING", "true").lower() == "true" else "INFO"
-    logger.add(
-        sys.stderr,
-        level=log_level,
-        format=(
-            "<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> | "
-            "<level>{level: <8}</level> | "
-            "<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>"
-        ),
-        colorize=True,
-    )
-    # --- End Loguru Configuration ---
-
-    parser = argparse.ArgumentParser(
-        description="TaleStreamAI - 自动化小说转视频工作流"
-    )
-    parser.add_argument(
-        "source",
-        nargs="?",
-        default=settings.book_source,
-        help=f"书籍来源：可以是起点ID或本地.txt文件路径 (默认为: {settings.book_source})",
-    )
-    parser.add_argument(
-        "--book_id",
-        default=settings.custom_book_id,
-        help="为本地文件指定一个自定义的书籍ID (默认为文件名)",
-    )
-    parser.add_argument(
-        "--test-connections",
-        action="store_true",
-        help="仅运行API连接测试后退出",
-    )
-
-    args = parser.parse_args()
-
-    if args.test_connections:
-        await test_llm_connections()
-        return
-
-    # 更新配置以反映命令行参数
-    # (dataclasses 是不可变的, 所以我们创建一个新的)
-    # 技巧：使用 object.__setattr__ 来绕过 frozen=True 的限制进行修改
-    # 但更清晰的方式是在启动时就决定好配置
-    # 这里为了简单，我们假设 settings 已通过 .env 文件配置好，命令行仅用于临时覆盖
-    # 实际生产中可能会用更复杂的配置加载逻辑
-
-    # 使用命令行参数来确定 book_id
-    final_book_id = args.book_id
-    if not final_book_id:
-        if args.source.endswith(".txt"):
-            final_book_id = Path(args.source).stem
-        else:
-            final_book_id = args.source
-
-    logger.info(f"🚀 工作流启动，书籍ID: {final_book_id}")
-
-    # 初始化并运行流水线
-    pipeline = Pipeline(
-        book_id=final_book_id,
-        source_file=args.source if args.source.endswith(".txt") else None,
-    )
-
-    try:
-        await pipeline.run()
-    except Exception as e:
-        logger.exception(f"工作流执行过程中发生未捕获的严重错误: {e}")
-    else:
-        # This 'else' block only runs if the 'try' block completes without any exceptions
-        logger.info("🎉 工作流全部阶段成功完成！")
-
-
-if __name__ == "__main__":
-    asyncio.run(main())
 </file>
 
 <file path="app/stages/finalizer.py">
@@ -1535,7 +1595,7 @@ async def _refine_shot_prompt(shot: Shot, book_path: Path) -> Shot:
 
 async def _process_single_chunk(
     chunk: str, chapter_index: int, chunk_index: int, num_chunks: int, book_path: Path
-) -> list[Shot]:
+) -> list[Shot] | None:  # 修改返回类型提示
     """处理单个文本块，生成原始Shots列表，并增加重试逻辑。"""
     logger.info(
         f"Processing chunk {chunk_index + 1}/{num_chunks} for chapter {chapter_index}..."
@@ -1615,11 +1675,10 @@ async def _process_single_chunk(
             
             if attempt < max_retries - 1:
                 await asyncio.sleep(2 * (attempt + 1))  # Exponential backoff
-            else:
-                logger.error(f"All {max_retries} retries failed for chunk {chunk_index + 1}. Skipping.")
-                return []  # All retries failed, return empty list
-    
-    return []  # Should not be reached, but as a fallback
+
+    # 所有重试失败后，返回None而不是空列表
+    logger.error(f"All {max_retries} retries failed for chunk {chunk_index + 1}. Skipping.")
+    return None  # 修改点：返回None表示失败
 
 
 async def _process_chapter_content(chapter: Chapter, book_path: Path) -> list[Shot]:
@@ -1638,12 +1697,22 @@ async def _process_chapter_content(chapter: Chapter, book_path: Path) -> list[Sh
     ]
     results_per_chunk = await asyncio.gather(*chunk_processing_tasks)
 
-    # Flatten the results from all chunks into a single list of shots
-    proto_shots: list[Shot] = [
-        shot for chunk_result in results_per_chunk for shot in chunk_result
-    ]
+    # -- 新增的健壮性检查 --
+    proto_shots: list[Shot] = []
+    for i, chunk_result in enumerate(results_per_chunk):
+        if chunk_result is None:
+            # 失败不再静默！
+            logger.critical(
+                f"FATAL: Chapter {chapter.index}, chunk {i} failed to process after all retries. "
+                f"This chapter will be incomplete. Please check LLM API or network status."
+            )
+            # 你可以在这里决定是继续生成不完整的视频，还是抛出异常中止整个流程
+            # raise RuntimeError(f"Failed to process chunk {i} of chapter {chapter.index}")
+        else:
+            proto_shots.extend(chunk_result)
 
     if not proto_shots:
+        logger.error(f"No shots could be generated for chapter {chapter.index}.")
         return []
 
     # Step 2: Re-number all shots FIRST to give them unique IDs (MOVED FROM STEP 3)
@@ -1695,7 +1764,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 # 在模块加载时，第一时间加载环境变量
-load_dotenv()
+load_dotenv(override=True)
 
 
 def _get_bool_env(var_name: str, default: bool = False) -> bool:

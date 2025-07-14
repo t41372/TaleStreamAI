@@ -19,13 +19,11 @@ from ..services.image_provider import PollinationsImageGenerator
 from ..services.audio_provider import EdgeTTSAudioGenerator
 from ..ffmpeg_utils import get_ffmpeg_gpu_params
 
-# Instantiate service providers
-image_generator = PollinationsImageGenerator()
-audio_generator = EdgeTTSAudioGenerator()
+# Service providers will be injected via dependency injection
 
 
 # --- Image Generation (Now uses the service provider) ---
-async def _generate_image_asset(shot: Shot, book_path: Path) -> Shot:
+async def _generate_image_asset(shot: Shot, book_path: Path, image_generator: PollinationsImageGenerator) -> Shot:
     """生成单个镜头的图片资产"""
     if shot.error:
         return shot
@@ -55,33 +53,44 @@ async def _generate_image_asset(shot: Shot, book_path: Path) -> Shot:
 
 
 # --- Audio Generation (Now uses the service provider) ---
-async def _generate_audio_asset(shot: Shot, book_path: Path) -> Shot:
-    """生成单个镜头的音频资产"""
+async def _generate_audio_asset(shot: Shot, book_path: Path, audio_generator: EdgeTTSAudioGenerator) -> Shot:
+    """生成单个镜头的音频和SRT字幕资产"""
     if shot.error:
         return shot
 
     audio_dir = book_path / "audio" / str(shot.chapter_index)
     audio_dir.mkdir(parents=True, exist_ok=True)
     shot.audio_path = audio_dir / f"{shot.shot_id}.mp3"
-    shot.srt_path = shot.audio_path.with_suffix(".srt")  # srt logic to be added later
+    shot.srt_path = shot.audio_path.with_suffix(".srt")
 
-    if shot.audio_path.exists():
-        logger.debug(f"Audio already exists for shot {shot.get_full_id()}, skipping generation.")
+    if shot.audio_path.exists() and shot.srt_path.exists() and shot.srt_path.stat().st_size > 0:
+        logger.debug(f"Audio and SRT already exist for shot {shot.get_full_id()}, skipping generation.")
         return shot
 
-    logger.debug(f"Generating audio for shot {shot.get_full_id()}...")
+    logger.debug(f"Generating audio and SRT for shot {shot.get_full_id()}...")
     try:
         if not shot.original_text:
             raise ValueError("Original text for audio is missing.")
 
-        audio_data = await audio_generator.generate(shot.original_text, settings.edge_tts_voice)
+        # 调用新版方法，解包返回的元组
+        audio_data, srt_content = await audio_generator.generate(
+            shot.original_text, settings.edge_tts_voice
+        )
 
         shot.audio_path.write_bytes(audio_data)
-        # Placeholder for srt generation
-        shot.srt_path.write_text("")
+        
+        # 写入真实的SRT内容
+        if srt_content:
+            shot.srt_path.write_text(srt_content, encoding="utf-8")
+            logger.debug(f"SRT file generated for shot {shot.get_full_id()}.")
+        else:
+            # 作为后备，如果没生成字幕，也创建一个空文件，避免后续流程出错
+            shot.srt_path.write_text("", encoding="utf-8")
+            logger.warning(f"No SRT content generated for shot {shot.get_full_id()}.")
+
     except Exception as e:
-        shot.error = f"Audio generation failed: {e}"
-        logger.error(f"Shot {shot.get_full_id()} failed during audio generation: {e}")
+        shot.error = f"Audio/SRT generation failed: {e}"
+        logger.error(f"Shot {shot.get_full_id()} failed during audio/SRT generation: {e}")
 
     return shot
 
@@ -165,7 +174,7 @@ def _generate_video_clip_asset_sync(shot: Shot, book_path: Path) -> Shot:
 
 # --- Main Orchestrator ---
 async def generate_all_assets(
-    shots: list[Shot], book_path: Path, process_executor: ProcessPoolExecutor
+    shots: list[Shot], book_path: Path, image_generator: PollinationsImageGenerator, audio_generator: EdgeTTSAudioGenerator, process_executor: ProcessPoolExecutor
 ) -> list[Shot]:
     """
     资产生成阶段的主函数。
@@ -177,8 +186,8 @@ async def generate_all_assets(
     )
 
     # We create image and audio tasks separately to handle potential errors gracefully
-    image_tasks = [_generate_image_asset(shot, book_path) for shot in shots]
-    audio_tasks = [_generate_audio_asset(shot, book_path) for shot in shots]
+    image_tasks = [_generate_image_asset(shot, book_path, image_generator) for shot in shots]
+    audio_tasks = [_generate_audio_asset(shot, book_path, audio_generator) for shot in shots]
 
     # Await both sets of I/O tasks
     await asyncio.gather(*image_tasks, *audio_tasks)

@@ -5,7 +5,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 # 在模块加载时，第一时间加载环境变量
-load_dotenv()
+load_dotenv(override=True)
 
 
 def _get_bool_env(var_name: str, default: bool = False) -> bool:

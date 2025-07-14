@@ -22,13 +22,13 @@ class AudioGenerator(ABC):
     """音频生成器的抽象基类接口。"""
 
     @abstractmethod
-    async def generate(self, text: str, voice: str) -> bytes:
+    async def generate(self, text: str, voice: str) -> tuple[bytes, str]:
         """
-        根据给定的文本和语音生成音频数据。
+        根据给定的文本和语音生成音频数据和SRT字幕。
 
         :param text: 要转换为语音的文本。
         :param voice: 使用的语音名称。
-        :return: 音频的二进制数据 (e.g., MP3)。
+        :return: 一个元组 (音频的二进制数据, SRT字幕字符串)。
         :raises Exception: 如果生成失败。
         """
         pass 
