@@ -174,29 +174,52 @@ def _generate_video_clip_asset_sync(shot: Shot, book_path: Path) -> Shot:
 
 # --- Main Orchestrator ---
 async def generate_all_assets(
-    shots: list[Shot], book_path: Path, image_generator: PollinationsImageGenerator, audio_generator: EdgeTTSAudioGenerator, process_executor: ProcessPoolExecutor
+    shots: list[Shot],
+    book_path: Path,
+    image_generator: PollinationsImageGenerator,
+    audio_generator: EdgeTTSAudioGenerator,
+    process_executor: ProcessPoolExecutor,
 ) -> list[Shot]:
     """
     资产生成阶段的主函数。
     并发生成所有镜头的图片和音频，然后将视频合成任务分派到进程池。
     """
-    # 步骤 1: 并发生成所有I/O密集型资产（图片和音频）
+    # 步骤 1: 并发生成图片资产
     logger.info(
-        f"Starting parallel generation of I/O-bound assets (image, audio) for {len(shots)} shots..."
+        f"Starting parallel generation of image assets for {len(shots)} shots..."
     )
+    image_tasks = [
+        _generate_image_asset(shot, book_path, image_generator) for shot in shots
+    ]
+    # +++ 捕获更新后的 Shot 对象 +++
+    shots_with_images = await asyncio.gather(*image_tasks)
 
-    # We create image and audio tasks separately to handle potential errors gracefully
-    image_tasks = [_generate_image_asset(shot, book_path, image_generator) for shot in shots]
-    audio_tasks = [_generate_audio_asset(shot, book_path, audio_generator) for shot in shots]
+    # 步骤 2: 基于已更新的Shot列表，并发生成音频资产
+    logger.info(
+        f"Starting parallel generation of audio assets for {len(shots_with_images)} shots..."
+    )
+    # +++ 使用上一步的结果来创建新任务 +++
+    shots_to_process_audio = [s for s in shots_with_images if not s.error]
+    audio_tasks = [
+        _generate_audio_asset(shot, book_path, audio_generator)
+        for shot in shots_to_process_audio
+    ]
+    # +++ 再次捕获更新后的 Shot 对象 +++
+    shots_with_audio = await asyncio.gather(*audio_tasks)
+    
+    # 合并成功和失败的结果，保持列表完整性
+    processed_io_shots = {s.get_full_id(): s for s in shots_with_audio}
+    all_shots_after_io = [
+        processed_io_shots.get(s.get_full_id(), s) for s in shots_with_images
+    ]
 
-    # Await both sets of I/O tasks
-    await asyncio.gather(*image_tasks, *audio_tasks)
-
-    # 步骤 2: 将CPU密集型任务（视频合成）提交到进程池
+    # 步骤 3: 将CPU密集型任务（视频合成）提交到进程池
     logger.info("Scheduling CPU-bound assets (video clips) to process pool...")
     loop = asyncio.get_event_loop()
     cpu_tasks = []
-    for shot in shots:
+    
+    # +++ 使用经过IO处理后、状态完全更新的 Shot 列表 +++
+    for shot in all_shots_after_io:
         # run_in_executor 在一个指定的执行器（这里是进程池）中运行函数
         task = loop.run_in_executor(
             process_executor,
@@ -207,6 +230,6 @@ async def generate_all_assets(
         cpu_tasks.append(task)
 
     # 等待所有视频片段合成任务完成
-    processed_shots = await asyncio.gather(*cpu_tasks)
+    final_processed_shots = await asyncio.gather(*cpu_tasks)
 
-    return list(processed_shots)
+    return list(final_processed_shots)

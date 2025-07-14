@@ -42,3 +42,16 @@ class Chapter:
     index: int
     content: str
     shots: list[Shot] = field(default_factory=list)
+
+
+@dataclass
+class TextChunk:
+    """表示一个经过语义分割的文本块，是送入LLM进行处理的基本单元。"""
+
+    chunk_id: int  # 块的顺序ID
+    text: str  # 块的文本内容
+    char_start_index: int  # 在原始全文中的起始字符索引
+    char_end_index: int  # 在原始全文中的结束字符索引
+
+    def __len__(self) -> int:
+        return len(self.text)

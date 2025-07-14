@@ -32,7 +32,7 @@ The content is organized as follows:
 <notes>
 - Some files may have been excluded based on .gitignore rules and Repomix's configuration
 - Binary files are not included in this packed representation. Please refer to the Repository Structure section for a complete list of file paths, including binary files
-- Files matching these patterns are excluded: LICENSE
+- Files matching these patterns are excluded: test_novel.txt, tests/test_novel.txt, LICENSE
 - Files matching patterns in .gitignore are excluded
 - Files matching default ignore patterns are excluded
 - Files are sorted by Git change count (files with more changes are at the bottom)
@@ -54,12 +54,15 @@ app/
     finalizer.py
     storyboard.py
   cache.py
+  chunker.py
   config.py
   ffmpeg_utils.py
   llm_client.py
   models.py
   pipeline.py
   tool.py
+tests/
+  test_chunker.py
 .env_old
 .env.sample
 .gitignore
@@ -67,101 +70,290 @@ app/
 pyproject.toml
 README.md
 run.py
-test_chunking.py
-test_novel.txt
 </directory_structure>
 
 <files>
 This section contains the contents of the repository's files.
 
-<file path="test_chunking.py">
-#!/usr/bin/env python3
+<file path="app/chunker.py">
+"""Split multilingual text into non‑overlapping chunks near a token limit.
 
+默认针对 **中文**，亦兼容英文及其他语言。
+"""
+
+from __future__ import annotations
+
+import re
 import sys
-from pathlib import Path
-from chonkie import SentenceChunker
+import pathlib
+import subprocess
+from typing import Iterable, List, Iterator, Tuple
 
-# Add the app directory to the Python path
-sys.path.insert(0, str(Path(__file__).parent / "app"))
+import tiktoken
 
-from app.stages.storyboard import _create_semantic_chunks
+# +++ 引入我们自己的数据模型 +++
+from .models import TextChunk
 
-def test_chunking():
-    # Read the test novel
-    with open("test_novel.txt", "r", encoding="utf-8") as f:
-        content = f.read()
-    
-    print("=" * 50)
-    print("原始文本开头 (前200个字符):")
-    print(content[:200])
-    print("=" * 50)
-    
-    # Test our chunking function
-    chunks = _create_semantic_chunks(content, max_tokens=2500, model_name="gpt-4o")
-    
-    print(f"\n生成了 {len(chunks)} 个分块")
-    print("=" * 50)
-    
-    for i, chunk in enumerate(chunks):
-        print(f"分块 {i+1}:")
-        print(f"长度: {len(chunk)} 字符")
-        print(f"开头: {chunk[:100]}...")
-        print(f"结尾: ...{chunk[-100:]}")
-        print("-" * 30)
-    
-    # Test direct chonkie usage
-    print("\n" + "=" * 50)
-    print("直接使用 chonkie 测试:")
-    
-    chunker = SentenceChunker(
-        tokenizer_or_token_counter="cl100k_base",
-        chunk_size=2500,
-        chunk_overlap=min(100, 2500 // 4),
-        min_sentences_per_chunk=1
-    )
-    
-    chunk_objects = chunker(content)
-    direct_chunks = [chunk.text for chunk in chunk_objects]
-    
-    print(f"直接使用 chonkie 生成了 {len(direct_chunks)} 个分块")
-    for i, chunk in enumerate(direct_chunks):
-        print(f"分块 {i+1}:")
-        print(f"长度: {len(chunk)} 字符")
-        print(f"开头: {chunk[:100]}...")
-        print(f"结尾: ...{chunk[-100:]}")
-        print("-" * 30)
-    
-    # Compare first chunks
-    print("\n" + "=" * 50)
-    print("比较第一个分块:")
-    print(f"我们的函数结果开头: {chunks[0][:50]}...")
-    print(f"直接 chonkie 结果开头: {direct_chunks[0][:50]}...")
-    
-    # Check if there's any content loss
-    combined_chunks = "".join(chunks)
-    combined_direct = "".join(direct_chunks)
-    
-    print(f"\n原始文本长度: {len(content)}")
-    print(f"我们的函数合并后长度: {len(combined_chunks)}")
-    print(f"直接 chonkie 合并后长度: {len(combined_direct)}")
-    
-    if len(combined_chunks) != len(content):
-        print("⚠️  警告：我们的函数可能丢失了内容！")
-    
-    if len(combined_direct) != len(content):
-        print("⚠️  警告：直接 chonkie 可能丢失了内容！")
-    
-    # Check overlaps
-    print(f"\n检查重叠:")
-    for i in range(len(chunks) - 1):
-        overlap_start = chunks[i][-50:]
-        overlap_end = chunks[i+1][:50]
-        print(f"分块 {i+1} 末尾: ...{overlap_start}")
-        print(f"分块 {i+2} 开头: {overlap_end}...")
-        print("-" * 20)
+try:
+    import spacy
+except ImportError as err:  # pragma: no cover
+    raise RuntimeError("spaCy is required: `pip install spacy`") from err
+
+__all__ = [
+    "chunk_text",
+    "chunk_file",
+    "DEFAULT_TOKEN_LIMIT",
+    "DEFAULT_ENCODING",
+]
+
+DEFAULT_TOKEN_LIMIT = 1000
+DEFAULT_ENCODING = "o200k_base"
+
+_SENT_PUNCTS = re.compile(r"(?<=[.!?。！？；;])\s+")  # fallback splitter
+
+
+def _ensure_spacy_model() -> "spacy.language.Language":
+    """Load a spaCy model; auto‑download if missing.
+
+    Preference order:
+      1. zh_core_web_sm (better sentence segmentation for中文)
+      2. xx_sent_ud_sm (universal UD sentence model)
+    """
+    for model in ("zh_core_web_sm", "xx_sent_ud_sm"):
+        try:
+            return spacy.load(model, disable=["tokenizer", "tagger", "parser", "ner", "lemmatizer"])
+        except OSError:
+            # auto download
+            try:
+                subprocess.run(
+                    [sys.executable, "-m", "spacy", "download", model],
+                    check=True,
+                    capture_output=True,
+                )
+                return spacy.load(
+                    model, disable=["tokenizer", "tagger", "parser", "ner", "lemmatizer"]
+                )
+            except subprocess.CalledProcessError:
+                continue
+    raise RuntimeError("无法加载或下载 spaCy 语言模型 (zh_core_web_sm / xx_sent_ud_sm)")
+
+
+_NLP = None  # lazy‑loaded
+
+
+def _get_nlp():
+    global _NLP
+    if _NLP is None:
+        _NLP = _ensure_spacy_model()
+    return _NLP
+
+
+def _sentences(text: str) -> Iterable[str]:
+    """Yield sentences using spaCy; fallback to naive splitting if spaCy fails."""
+    try:
+        nlp = _get_nlp()
+        for sent in nlp(text).sents:
+            yield sent.text
+    except Exception:  # pragma: no cover – fallback path
+        # naive split by punctuation with keeping delimiter
+        parts = re.split(r"([.!?。！？；;]+)", text)
+        sent = ""
+        for piece in parts:
+            sent += piece
+            if _SENT_PUNCTS.match(piece) or piece.strip() in "。！？.!?;；":
+                yield sent
+                sent = ""
+        if sent:
+            yield sent
+
+
+def _num_tokens(text: str, enc) -> int:
+    return len(enc.encode(text))
+
+
+# +++ Step 1: 将原 chunk_text 重构为内部生成器，返回块和索引 +++
+def _iter_chunks(
+    text: str,
+    token_limit: int,
+    enc,
+) -> Iterator[Tuple[str, int, int]]:
+    """
+    内部生成器，yields (chunk_text, start_char_index, end_char_index).
+    这部分是纯粹的分块逻辑。
+    """
+    current: List[str] = []
+    current_tokens = 0
+    char_start_index = 0
+
+    def flush(current_char_end_index: int) -> Tuple[str, int, int]:
+        nonlocal current, current_tokens, char_start_index
+        chunk_text = "".join(current)
+        chunk_indices = (chunk_text, char_start_index, current_char_end_index)
+        char_start_index = current_char_end_index
+        current = []
+        current_tokens = 0
+        return chunk_indices
+
+    char_cursor = 0
+    for sentence in _sentences(text):
+        sent_len = len(sentence)
+        sent_tokens = _num_tokens(sentence, enc)
+
+        if sent_tokens > token_limit:
+            # 尝试子分割
+            subs = re.split(r"([,，、;；])", sentence)
+            combined = (
+                ["".join(pair) for pair in zip(subs[0::2], subs[1::2] + [""])]
+                if len(subs) > 1
+                else [sentence]
+            )
+
+            for sub in combined:
+                sub_len = len(sub)
+                sub_tokens = _num_tokens(sub, enc)
+                if current_tokens + sub_tokens > token_limit and current:
+                    yield flush(char_cursor)
+                
+                current.append(sub)
+                current_tokens += sub_tokens
+                char_cursor += sub_len
+        else:
+            if current_tokens + sent_tokens > token_limit and current:
+                yield flush(char_cursor)
+            
+            current.append(sentence)
+            current_tokens += sent_tokens
+            char_cursor += sent_len
+
+    if current:
+        yield flush(len(text))
+
+
+# +++ Step 2: 创建新的公共函数，返回流水线所需的数据模型 +++
+def chunk_text(
+    text: str,
+    token_limit: int = DEFAULT_TOKEN_LIMIT,
+    encoding_name: str = DEFAULT_ENCODING,
+) -> List[TextChunk]:
+    """
+    将文本分割成 TextChunk 对象列表，每个对象的token数约等于 token_limit。
+    这是提供给应用程序其他部分的公共API。
+    """
+    if not text:
+        return []
+
+    enc = tiktoken.get_encoding(encoding_name)
+    chunks = []
+    chunk_id_counter = 0
+
+    for chunk_text, start_idx, end_idx in _iter_chunks(text, token_limit, enc):
+        chunks.append(
+            TextChunk(
+                chunk_id=chunk_id_counter,
+                text=chunk_text,
+                char_start_index=start_idx,
+                char_end_index=end_idx,
+            )
+        )
+        chunk_id_counter += 1
+
+    # 完整性检查：确保所有块连接起来等于原始文本
+    reconstructed_text = "".join(c.text for c in chunks)
+    if reconstructed_text != text:
+        # 在开发中，这是一个关键的断言，确保我们的逻辑没有引入间隙或重叠
+        raise AssertionError("分块后合并文本与原始文本不一致；请检查 _iter_chunks 实现")
+
+    return chunks
+
+
+def chunk_file(
+    path: str | pathlib.Path, token_limit: int = DEFAULT_TOKEN_LIMIT
+) -> List[pathlib.Path]:
+    """Chunk a file and write chunk_<idx>.txt next to it. Return list of chunk paths."""
+    path = pathlib.Path(path)
+    text = path.read_text(encoding="utf-8")
+    # 注意: 这里返回的是 TextChunk 对象，而不是字符串。
+    # chunk_file 的原始目的（写入 chunk_*.txt）可能需要重新审视，
+    # 但我们暂时保持其行为，只写入文本部分。
+    chunk_objects = chunk_text(text, token_limit)
+    out_paths: List[pathlib.Path] = []
+    for idx, ch_obj in enumerate(chunk_objects):
+        out_path = path.with_name(f"chunk_{idx}.txt")
+        out_path.write_text(ch_obj.text, encoding="utf-8")
+        out_paths.append(out_path)
+    return out_paths
+
 
 if __name__ == "__main__":
-    test_chunking()
+    import argparse, textwrap
+
+    parser = argparse.ArgumentParser(
+        description="Split text file into non‑overlapping chunks near token limit.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=textwrap.dedent(
+            """示例:
+              uv run -m app.chunker test_novel.txt -l 1024
+            """,
+        ),
+    )
+    parser.add_argument("file", help="文本文件路径")
+    parser.add_argument("-l", "--limit", type=int, default=DEFAULT_TOKEN_LIMIT, help="token limit")
+    args = parser.parse_args()
+    paths = chunk_file(args.file, args.limit)
+    print("生成 chunk 文件:")
+    for p in paths:
+        print("  ", p)
+</file>
+
+<file path="tests/test_chunker.py">
+# -----------------------
+# File: tests/test_chunker.py
+"""Pytest test‑suite for text_chunker."""
+
+import pathlib
+from app.chunker import chunk_file, chunk_text, DEFAULT_TOKEN_LIMIT
+
+TEST_DATA = pathlib.Path(__file__).parent / "test_novel.txt"
+
+
+def test_roundtrip_default_limit():
+    text = TEST_DATA.read_text(encoding="utf-8")
+    chunks = chunk_text(text, DEFAULT_TOKEN_LIMIT)
+    assert "".join(c.text for c in chunks) == text, "chunking produced gaps or overlaps"
+    assert all(len(c.text) > 0 for c in chunks)
+
+
+def test_various_limits():
+    text = "这是一段中文。这是第二句。This is an English sentence. 这是第三句。"
+    for limit in (128, 256, 512):
+        chunks = chunk_text(text, limit)
+        assert "".join(c.text for c in chunks) == text
+        # ensure each chunk roughly <= limit (allow a small slack of 10%)
+        import tiktoken
+
+        enc = tiktoken.get_encoding("o200k_base")
+        assert all(len(enc.encode(c.text)) <= limit * 1.1 for c in chunks)
+
+
+def test_chunk_file_generation(tmp_path):
+    temp_file = tmp_path / "sample.txt"
+    temp_file.write_text("这是一句。" * 100, encoding="utf-8")
+    out_paths = chunk_file(temp_file, 128)
+    # ensure chunk files exist and reconstruct original
+    assert out_paths
+    recon = "".join(p.read_text(encoding="utf-8") for p in out_paths)
+    assert recon == temp_file.read_text(encoding="utf-8")
+
+
+# Clean up any chunk_*.txt accidentally left by manual runs
+
+
+def teardown_module(module):  # noqa: D401  # pylint: disable=missing-function-docstring
+    for f in TEST_DATA.parent.glob("chunk_*.txt"):
+        try:
+            f.unlink()
+        except Exception:  # pragma: no cover
+            pass
 </file>
 
 <file path="app/services/__init__.py">
@@ -243,7 +435,7 @@ AUDIO_SPEED=1.0
 </file>
 
 <file path=".python-version">
-3.12
+3.13
 </file>
 
 <file path="app/services/audio_provider.py">
@@ -418,6 +610,66 @@ def extract_chapter_id_and_name(title):
     return "", title
 </file>
 
+<file path="app/models.py">
+# app/models.py
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Optional
+
+
+@dataclass
+class Shot:
+    """
+    表示一个独立的分镜（或镜头）。
+    这是我们流水线中处理的基本工作单元。
+    """
+
+    # 核心内容
+    shot_id: int
+    chapter_index: int
+    original_text: str
+
+    # 生成的数据 (最终使用的提示词)
+    image_prompt: Optional[str] = None
+
+    # 生成的资产路径
+    storyboard_path: Optional[Path] = None  # 指向分镜脚本JSON文件的路径
+    refined_prompt_path: Optional[Path] = None  # 指向优化后的提示词TXT文件的路径
+    image_path: Optional[Path] = None
+    audio_path: Optional[Path] = None
+    srt_path: Optional[Path] = None
+    video_clip_path: Optional[Path] = None
+
+    # 状态
+    error: Optional[str] = None
+
+    def get_full_id(self) -> str:
+        """返回唯一的镜头ID，格式为 '章节-镜头'"""
+        return f"{self.chapter_index}-{self.shot_id}"
+
+
+@dataclass
+class Chapter:
+    """表示一个完整的章节，包含多个分镜。"""
+
+    index: int
+    content: str
+    shots: list[Shot] = field(default_factory=list)
+
+
+@dataclass
+class TextChunk:
+    """表示一个经过语义分割的文本块，是送入LLM进行处理的基本单元。"""
+
+    chunk_id: int  # 块的顺序ID
+    text: str  # 块的文本内容
+    char_start_index: int  # 在原始全文中的起始字符索引
+    char_end_index: int  # 在原始全文中的结束字符索引
+
+    def __len__(self) -> int:
+        return len(self.text)
+</file>
+
 <file path=".env.sample">
 # TaleStreamAI 环境变量配置文件
 # 将此文件复制为 .env 并填入实际的配置值
@@ -503,500 +755,6 @@ VIDEO_HEIGHT=1280
 VERBOSE_LOGGING=true
 </file>
 
-<file path="test_novel.txt">
-欢迎来到西伯利亚
-
-1
-
-鼻骨断了？我一下揪住了蚊子的衣服，说：「我还要打！你想
-办法 ！」
-
-「别打了！西毒，再打下去你真就没命了！」李哥死死的握着
-我的手说：「认输吧，我对裁判说我们认输！」
-
-「别！」我一下揪住了李哥的领子，死死的拉着，「李哥，别
-认输，别，我求你了！」
-
-「你想死啊！」李哥喊了起来。
-
-「别认输！」我狠狠的揪着李哥的领子不松手，扭头对蚊子
-说：「快想办法！」
-
-蚊子愣了一下，又看了一眼不说话的李哥，赶紧给我处理伤
-势。先清除掉血迹，接着用两个加厚棉棒塞进了我的鼻孔里，
-塞的很深，顶在了断裂的鼻骨上。剧痛过后，那种异物探进脑
-袋里的感觉真让我恶心。
-
-「记着，用嘴巴呼吸！」蚊子拍我的脑袋说道。不用他说我也
-知道，我的鼻子已经无法通气了。
-黑市拳手对对手没有任何的同情，那种看到你受了重伤坚持搏
-斗而对你心生敬佩的剧情只能在电影里看到。比赛开始，芯片
-就迅速逼了上来，真是可怕的对手。
-
-也许我的伤让他大意了，在芯片刚进入攻击距离内，我突然起
-腿。
-
-打拳不能死打，有时候一个小小的变数让谁都招架不住。前腿
-侧踹，自从我踏入黑拳界就用的极少的一个腿法，正好蹬在芯
-片的脸上！
-
-前腿侧踹攻击距离长，启动又快，虽说力量一般，但打在头上
-的话也是有点效果的。芯片没有防住，被我踹的一个后仰。他
-双手的防御开始散乱，我抓住机会，朝他的左侧软肋疯狂连
-扫！
-
-我感觉我才是芯片！这机会抓的简直太帅了！我大张着嘴拼命
-喘气，催动全身力量不停扫踢，我知道过了这村就没这店了！
-
-芯片被我突然启动的连续重扫踢的身体晃荡，但他毕竟是极有
-经验的拳手，立刻恢复了防御。我马上放弃了腿攻，转而用快
-速的拳法进行贴身围剿。我能听见场馆内已经爆棚的呼喊声，
-观众们的激情让我血气上涌，不知疲倦的疯狂挥拳！大脑里只
-有一个念头，就是要摧毁对方！
-
-现在想起来，我觉得我真是疯了，在芯片架好防御的情况下，
-我竟然连续挥拳超过两分钟，一直到这个回合结束，我还在拼
-命的击打抱头的芯片，直到裁判把我拉开。
-坐在拳台角落里，我大口喘着气，双手都在发抖，刚才用力过
-度了。芯片坐在那里正在处理伤势，他的脸上也全都是血，不
-知道被打中了哪里。这麻绳很操蛋，使劲的划过去一下就破
-皮。李哥捧着我的脸说：「西毒，你感觉怎么样，没事吧？」
-
-「我很好……」我喘气喘的说话都不利索。
-
-「你眼睛怎么这么红？」
-
-「红吗？」红不红我自己也看不到，不管他了，爱红不红。新
-的回合一开始，我就冲了上去。这下彻底满足场内所有观众的
-欲望了，我跟芯片像两条发疯的斗狗一样厮杀在了一起。
-
-没错，在很多人的眼中，只有这样，才是黑拳。
-
-我已经记不清我挨了多少拳脚，到最后疼痛感已经消失，打在
-身上只是电击一般的麻，鲜血和汗水在我眼前飞溅，我分不清
-是谁的。一记看上去毫不起眼的摆拳过去，芯片身子一晃，倒
-下了。
-
-我接着的一拳打了个空。看着芯片倒在我的脚下，我忽然产生
-了一种错觉，觉得那倒下的人是我自己。我的意识都恍惚了。
-
-裁判蹲下去给芯片读秒。可芯片一直趴着，一动不动。一只手
-在脑袋前面，还握着拳，另一只手无力的摆在一边，拳头已经
-松开了。
-
-在第七回合，裁判宣布我获胜。我站在那里没有动，我真的是
-一动也不想动，我好累。场馆内沸声四起，我听不清他们在喊
-什么。李哥冲上来，紧紧的抱住了我。我就那么歪在他的身
-上，任凭他在我耳边大声大叫：「西毒，你赢了！你赢了，西
-毒！」
-
-西毒……是我吗？
-
-好多人涌上了拳台，我的思维好像静静漫过的海水，把一切泡
-的都不真实。眼前的景象全是模糊的，只有阿果是清楚的。
-
-我忽然间好想她。
-
-离开拳场，李哥带着我直接去了医院。我在离开的时候很后悔
-没有看到姓秦的跟姓陈的这一对拜把子兄弟。不过在医院听李
-哥说，这两家伙愣在那里一动不动，脸上难看的跟吃了屎一
-样。他们把所有的家底全部赔了进去，买回去的飞机票都是个
-困难。
-
-一场拳赛让他们倾家荡产。真是痛快。
-
-去医院做了手术，固定断裂的鼻骨。当那两个棉棒从我鼻子里
-掏出来的时候，真是又疼又爽。事后医生告诉我，全身的伤还
-有很多，不过没有什么致命的。我说你这不是废话吗，我一动
-全身都疼。
-
-医生白了我一眼，说，你的三根肋骨有不同程度的骨裂，注意
-养护。
-
-晚上躺在病床上，跟散架了似的。李哥坐在我旁边，抽着烟问
-我：「西毒，赢了，说说啥感想。」
-「没有感想，就是……累。」我实话实说。
-
-「你现在可是打败了芯片的拳手，回去让小妖他们知道了还不
-得羡慕死.。」李哥笑着说：「以后你跟他们可就不是一个档次
-的了。」
-
-我忽然想到：「李哥，你在我身上下注了吗？」
-
-「说实话，下是下了，还真没敢多下。下了五万，赚回来四十
-万。」李哥笑道：「早知道我就下四十万的注了。」
-
-「呵呵……」我刚想笑，就感觉鼻子生疼。我说：「那就好。李
-哥，回去后，我不想打拳了。」
-
-「嗯，不打就不打吧，想干点啥李哥支持你。阿果比你大，年
-龄也不小了，她也要过过安定的日子了。」
-
-「咱啥时候回去？」听到阿果，我一时间思归心切。
-
-「等你伤养的差不多了再走，反正现在也不急了。」听得出
-来，李哥也是松了一口气。这时候李哥那两个贴身的小弟从外
-面走进来，说：「李哥，芯片也送进这医院里来了。就在最头
-上的那间病房里，我刚才打听了一下，说是颅内震荡，现在还
-昏迷着呢。」
-
-「这家伙……他这次可害了不少人倾家荡产啊。」李哥说着，点
-了一根烟放在我面前。
-
-「李哥，你知道我不会抽烟。」
-「学学嘛，反正你以后又不打拳了。混社会，总得要抽烟的
-嘛。」李哥说。我一想也是，刚接过香烟，病房门开了，进来
-了三个高大的外国白人，在敞开衣服的胸口处，露出了貌似巨
-大蝴蝶的纹身。
-
-「你们是……」李哥一愣，刚想说什么，他们三个立刻掏出了手
-枪对准了我们，为首的一个白人用很流利的汉语说：「李向
-昂，你别乱动。」
-
-2
-
-这是一个单人病房，空间不大，三个拿枪的白人带着一股子杀
-气。一时间，无数念头闪过我脑海，他们干什么？报复？押注
-在芯片身上输钱的人？还是幕后组织老大请来的杀手……我被那
-黑洞洞的枪口指着，只觉得浑身冰冷。
-
-「你们怎么会知道我的名字！你们干什么的！」李哥是见过世
-面的人，在这种情况下也没有慌乱。虽然被枪指着不能动，但
-语气中却透着一股黑道大哥睥睨江湖的气度。
-
-「李向昂，你在天津还能说上几句话，可是在这里，我劝你最
-好闭嘴。」为首的那个白人一晃枪口，又指着李哥手下那两个
-蠢蠢欲动的小弟：「别逼我，我可不想在这里再杀人。」
-
-再杀人？我心里一惊，难道说他们刚才已经杀人了吗？杀谁
-了？
-
-李哥脸色铁青，并未闭嘴，而是沉声说道：「你们是芯片的
-人？难道输了比赛，就用这种下三滥的手段来报复吗！」
-「芯片，哦，不好意思，刚才他已经死了，就死在了这把枪
-下。」这个白人说着，晃了晃手上那把加了消音器的手枪，
-「留着他已经没用了，我们已经有了新的目标。」
-
-「你们到底是谁！」李哥的声音竟然有一些发颤。
-
-「蝴蝶会，李老大想必知道这个名字吧。」
-
-李哥愣了，他说出来的话带着不敢置信的腔调：「蝴蝶会？你
-们是……俄罗斯黑手党！」
-
-「说的没错。」那白人微微一笑。
-
-我被震惊了！简直不敢相信！面前的家伙竟然是闻名世界的黑
-帮团伙——俄罗斯黑手党的人！那个让俄罗斯政府都束手无策
-的组织？我的天，这他妈哪跟哪啊？
-
-「你们……想干什么？」李哥的声音有点发抖，他这次算是见到
-同道中人了，不过不是一个级别的。
-
-「那我就长话短说了。芯片本来是蝴蝶会物色的拳手，准备要
-他代表组织参加下一届黑市拳峰会的，没想到却败在了这个中
-国小子的手上。所以……」白人的蓝色眼睛紧紧的盯着我：「你
-要代替他。」
-
-「你们凭什么要求我代替他，你们没这个权利！」我徒劳地说
-道。
-
-「这个你说了不算。」白人咧嘴笑道：「我们现在就要带你
-走。」
-「我不走！」我强忍着恐惧，猛的发起狠来：「你们杀了我，
-也别想逃出去，这里是中国，可不是你们的地盘！」
-
-白人听了这话并不生气，却微微一笑，说出了一个名字，让我
-的心里猛然一颤！
-
-从他嘴里说出来的，竟然是我父亲的名字！
-
-「不要那么吃惊，在你参加这场比赛之前，关于你的所有资料
-我们都已经掌握了。如果你不配合的话，我们不仅会杀了你，
-还有你的家人，你的朋友，我们一个都不会放过。相信我，我
-们有这个能力。对于没有利用价值的人，我们从来不手软
-的。」
-
-我惊愕的已经说不出话来。怎么会，怎么会这样？我的大脑瞬
-间一片空白，原本以为一切都已经结束，这帮人却突然出现，
-凭空扼杀了我的希望。为什么？为什么会这样！
-
-「我们的时间已经不多了，芯片的尸体随时会被人发现。我给
-你一分钟的时间选择，是跟我们走，还是留在这里，跟你的家
-人一起变成尸体。」白人用枪指着我，口气中丝毫没有商量的
-余地。
-
-我转头去看李哥，他的脸色已经一片死灰。我明白，在这种情
-况下，他已经完全没辙。俄罗斯黑手党的传言我听说过，他们
-是全球势力范围最广的黑帮组织之一。由于俄罗斯的政府裁
-员，许多军方的精英都被俄罗斯黑手党所吸收，成为对抗政府
-法治的中坚力量。他们公开与社会对抗，明目张胆地进行各种
-犯罪活动。凡是威胁他们利益者，一律惨遭报复，许多政商名
-流被暗杀的事件，即出于他们之手。并且俄罗斯黑手党势力遍
-布全球，在美国都有分支机构。李哥的势力跟他们比起来，简
-直犹如蚂蚁之于大象。
-
-如果他们真的针对我家人和朋友的话，后果不堪设想。以他们
-的情报网，肯定连阿果也不会幸免于难。
-
-我明白，事情已经完全没有转机。我平静了下来，问：「我能
-先打一个电话吗？」
-
-「不好意思，不可以。从今天开始，你不能再跟任何人联
-系。」
-
-「你们要带我去哪？」
-
-「俄罗斯。」
-
-「我要多长时间才能回到中国？」
-
-「顺利的话，一年。在你不死的前提下。」
-
-我绝望了，我知道已经回天无力。事态的发展不受任何人的控
-制。我紧紧的抓着李哥的衣服做最后的嘱托：「李哥，不要告
-诉阿果我去了哪里，不要再让她担心。你只要告诉她，一定要
-让她等我，一年后我会回去找她，一定！还有，打电话告诉我
-家人，随便编一个什么理由都可以，千万别让他们为我担心！
-李哥，我拜托你了！」
-
-李哥的嘴唇在轻轻颤抖，他没有说话，握着我的手点了点头。
-我浑身疼痛的站了起来，说：「我跟你们走，不要伤害任何
-人。」
-
-就这样，我离开了这里，跟着他们去了一个陌生的国度。一切
-许下的誓言，都在残酷的现实面前灰飞烟灭。
-
-这帮人确实神通广大，不费吹灰之力就把我带到了俄罗斯。出
-国原来可以这么简单。说实话，他们在路上很照顾我，因为我
-的身体还没有恢复，不大适应长途跋涉。
-
-这些人对我的身份了如指掌，从根上掐断了我中途逃跑的机
-会。他们可能在中国长期活动，所以汉语说的非常流利。我问
-那个为首的白人叫什么名字，他说自己叫尼古拉耶维奇，不过
-这个名字并不好记，大家都叫他黑桃 K。我也可以这样称呼
-他。
-
-我问他，为什么不叫黑桃 A 呢？A 比 K 大。
-
-他皱皱眉：「我的老大叫黑桃 A。」
-
-我们来到了莫斯科。根本就没有时间领略这座充满传奇性的历
-史古城的风采，我就被直接带到了一架小型私人飞架上，我问
-黑桃 K 要去哪里，他告诉我说，去西伯利亚。
-
-西伯利亚，记忆中好遥远的地方。在我的心目中，它跟北冰洋
-是一个概念。听了我的话，黑桃 K 告诉我，西伯利亚的北面就
-是北冰洋。
-
-我顿时感觉到一股寒意。
-坐在有些颠簸的飞机上，我问：「为什么要去西伯利亚？」
-
-「因为在那里有一个训练营，你要在那儿接受训练。」黑桃 K
-简短地回道。
-
-「朱可夫训练营吗？」我接着问道，心想还真有这地方？
-
-「朱可夫？」黑桃 K 愣了一下，「朱可夫是二战时期的苏联元
-帅，跟训练营有什么关系？」
-
-「难道我说错了吗？」我掰着手指头说：「世界五大黑拳训练
-营，有印尼的班加旺训练营、哥伦比亚的黑十字训练营、阿富
-汉的星月训练营、中印边境的康巴训练营和西伯利亚的朱可夫
-训练营。它们培养了世界上最为优秀的黑市拳拳手，并且把这
-些拳手输出向世界各地，通过参加比赛为这些组织赚取巨额奖
-金。难道不是吗？」
-
-「哦，你们中国人的想象力真是太丰富了，这都是谁告诉你
-的？」黑桃 K 颇为无奈的扶着自己的额头：「怎么说的还跟真
-事一样，我从来就没听说过什么朱可夫训练营，我告诉你，你
-说的这些都是假的。」
-
-「我靠……竟然全都是假的？」我暗暗的想，妈的，被地摊文学
-给骗了。
-
-「那我们将要去的训练营叫什么名字？」我不甘心的问。
-
-「没有名字，这个地方本来是我们蝴蝶会的一个秘密分支机
-构，为了准备一年之后的国际黑市拳峰会，才临时改成了训练
-营。」黑桃 K 转头对我说：「你就叫它训练营，就可以了。」
-
-3
-
-飞机在广袤无垠的高原上飞行，下面的景色极为苍凉壮阔。巨
-大的西伯利亚如同一个沉睡的巨人，一眼望不到边际的躺卧在
-大地之上。黑桃 K 指着下面说：「看，那是贝加尔湖。」
-
-我从飞机上向下看去，只间苍茫辽阔的大地之上，有一片清澈
-无瑕的蓝色，好像撒在大地上的一把蓝色珍珠。湖型狭长弯
-曲，宛如一弯新月，黑桃 K 带着自豪的口气说：「贝加尔湖是
-世界上最深最大的淡水湖，被称作西伯利亚的明眸。」
-
-啊，果真漂亮，那就是贝加尔湖吗？那就是中国史书里所记载
-的「北海」，苏武牧羊的地方？我淡淡地道：「我们汉朝的哥
-们苏武，曾经在这里住了 19 年，天天放羊。」
-
-黑桃 K 扭头看了我一眼，接着咧嘴笑了起来：「真不愿意跟中
-国人打交道。」
-
-「为什么？」
-
-「因为中国人跟俄罗斯人一样，心中都有一个大国情节。不管
-在多么艰苦恶劣的条件下，这种大国情节就像印记一样被刻在
-了骨头里，永远无法抹除。」黑桃 K 耸耸肩，「大国对大国，
-当然不愿意打交道了。用你们中国人的话来说，叫一山不容二
-虎。」
-「哦，我想我现在对你没有什么威胁。」我指着自己的鼻子
-说：「我的鼻骨还没有长好呢。」
-
-黑桃 K 只是笑笑，不再说话。他其实笑的时候挺多，并没有我
-想象中的那么残酷。这个杀手不太冷。
-
-其实从广州到莫斯科，再到这里，我中间不止一次的想过逃
-脱。以他们对我的看护程度，不是没有逃脱的可能。但最后，
-我还是放弃了，我不能拿所有人的性命冒险。黑桃 K 绝对没有
-表面上那么温文尔雅，我逃了，我的家人，我的朋友，还有阿
-果，都会有灭顶之灾。
-
-飞机最后降落在普托兰纳，一块隐藏在西伯利亚广阔原始森林
-里的高原。
-
-下了飞机之后，我并没有感觉到寒冷。空气非常清新，阳光照
-射也很充足，身上暖洋洋的。黑桃 K 告诉我，西伯利亚也有夏
-天，只不过非常短暂。这里的冬天十分严寒，有时达到摄氏零
-下四五十度，能够冻炸我的肺。
-
-「说说黑市拳峰会吧。」在前往训练营的路上，我问黑桃 K。
-走了几步路，我的旧伤又疼了起来。
-
-「国际黑市拳峰会三年举办一次，对整个世界的职业黑拳手来
-说都很重要。哪个组织的代表拳手如果在这场峰会上夺得冠
-军，对于这个组织的整个家族来说都是一个巨大的荣誉，同时
-还能带来巨大金额的生意。」黑桃 K 看我走路费劲，还搀扶了
-我一把，「明白吗？这对我们来说很重要。」
-「这么大的赌注，你们全都押在我一个人身上？」
-
-「不，不，你并不是惟一的，你只是其中之一，就像被你打败
-的芯片一样。一年后，你会和训练营里面的其他拳手一起参加
-峰会。」
-
-「如果我得不到冠军呢。」我终于问了这个我最关心的问题：
-「如果我得不到冠军，你们就会杀了我，我再也不会回到中国
-是吧。」
-
-黑桃 K 笑了起来：「西毒先生，我们是黑帮，不是屠夫。请不
-要把我们想的太坏，除非在没有办法的情况下。」
-
-我稍微安心了些，他又接着说道：「冠军只有一个，谁都不知
-道哪一个人会获得冠军头衔。不管你打赢或者打输，只要你最
-后能够活下来，我们都会按照约定把你送回中国。但是……我想
-你一定不愿意输的，在那个拳台上，输跟死，几乎没有区
-别。」
-
-「还有，」黑桃 K 又道：「只要你能入围，最后活下来的话，
-会有 5 万美金的报酬。」
-
-「你能让我打一个国际长途电话吗？」
-
-「不能，我已经说过了，你不能再和任何人联系。」
-
-这座位于普托兰纳高原的训练营看上去就像是一所监狱，那灰
-色的建筑没有一点生气。黑桃 K 告诉我，本来这个地方是没有
-这么大的，这是后来又扩建起来的。他把我送到了训练营另一
-个白人的手中，就没有他事了。临走的时候，黑桃 K 对我说：
-「嘿，中国小子，希望一年之后我还能有机会把你送回中
-国。」
-
-看着黑桃 K 离去，我忽然想起了一句老话，有人的地方，就有
-江湖。
-
-「嘿，你，会说英语吗？」训练营的那个高大健壮的白人用英
-语问我。这人的体格极其强健，脸上的两道皱纹又深又长，好
-像两道刀疤。看样子应该是这里的教官一类的。
-
-「会说一点，说的不好。」我也用英语回答道。
-
-「那没有办法，你以后慢慢适应吧。因为这里没有人会说中国
-话，包括我。」白人尽量说的很慢，以便我能听懂，「我是这
-里的第一教官，耶奇科夫斯基，前陆军上尉。你叫我教官就行
-了。」
-
-「哦，教官，我能先打一个电话吗？」
-
-「不能，这里没有任何通讯设备。」教官冷冷地回道。
-
-他带着我走进训练营。这里很空旷，就像它所在的西伯利亚一
-样毫无生气。我注意到里面还有一些拿着武器的军士，人并不
-多，但也有十几个，他们见了这位叫做「耶奇科夫斯基」的教
-官都立正行礼，而教官却只是略略的点头致意。
-
-教官带着我去见了一个医生。我能认出来他是医生，因为他穿
-着一件白色大褂。好像世界上所有的医生都是这身打扮。医生
-检查了一下我之前的伤势，尤其是我那还没有愈合的鼻骨，转
-头对教官叽里呱啦说了一通话。我一句也听不懂，不过听语速
-和发音，应该是俄语。
-
-教官听了医生的话后点了点头，带着我进了一个房间，对我
-说：「你身上的伤势还不允许参加训练，住在这个房间里，十
-五天之后开始训练。」
-
-「要把我关在这个房间里十五天？」我看了一眼这个不大的地
-方，一张床，一张桌子，上面摆放着一台老式的电脑，还是显
-示器压在歪倒的主机上那种。在房间里还吊着一个沙袋，室内
-有一个小厕所，除此之外别无仅有。
-
-「十五天，你的任务是让自己的身体快速痊愈，我想够了。」
-教官指着门外说，「每天会有人过来给你送饭。还有，不要想
-着从这里跑出去，外面的那些士兵会当场射杀你。」
-</file>
-
-<file path="app/models.py">
-# app/models.py
-from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Optional
-
-
-@dataclass
-class Shot:
-    """
-    表示一个独立的分镜（或镜头）。
-    这是我们流水线中处理的基本工作单元。
-    """
-
-    # 核心内容
-    shot_id: int
-    chapter_index: int
-    original_text: str
-
-    # 生成的数据 (最终使用的提示词)
-    image_prompt: Optional[str] = None
-
-    # 生成的资产路径
-    storyboard_path: Optional[Path] = None  # 指向分镜脚本JSON文件的路径
-    refined_prompt_path: Optional[Path] = None  # 指向优化后的提示词TXT文件的路径
-    image_path: Optional[Path] = None
-    audio_path: Optional[Path] = None
-    srt_path: Optional[Path] = None
-    video_clip_path: Optional[Path] = None
-
-    # 状态
-    error: Optional[str] = None
-
-    def get_full_id(self) -> str:
-        """返回唯一的镜头ID，格式为 '章节-镜头'"""
-        return f"{self.chapter_index}-{self.shot_id}"
-
-
-@dataclass
-class Chapter:
-    """表示一个完整的章节，包含多个分镜。"""
-
-    index: int
-    content: str
-    shots: list[Shot] = field(default_factory=list)
-</file>
-
 <file path=".gitignore">
 # Python-generated files
 __pycache__/
@@ -1018,187 +776,65 @@ prompt_history
 
 <file path="app/stages/content.py">
 # app/stages/content.py
-import asyncio
-import json
-import os
-import re
 from pathlib import Path
 from typing import Optional
 
-import aiohttp
-from bs4 import BeautifulSoup
+from loguru import logger
 
 from ..config import settings
-from loguru import logger
-from ..models import Chapter
+from ..models import TextChunk
+from ..chunker import chunk_text
 
 
-async def _fetch_url(session: aiohttp.ClientSession, url: str) -> Optional[str]:
-    """异步获取URL内容。"""
-    headers = {
-        "Cookie": os.getenv("COOKIE", ""),
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    }
-    try:
-        async with session.get(url, headers=headers, timeout=30) as response:
-            response.raise_for_status()
-            return await response.text()
-    except aiohttp.ClientError as e:
-        logger.error(f"网络请求失败: {url}, 错误: {e}")
-        return None
-
-
-def _parse_chapters_from_html(html_content: str) -> list[dict]:
-    """从目录页HTML中解析章节列表。"""
-    soup = BeautifulSoup(html_content, "html.parser")
-    volume_chapters = soup.find("ul", class_="volume-chapters")
-    if not volume_chapters:
-        return []
-
-    chapters = []
-    for item in volume_chapters.find_all("li", class_="chapter-item"):
-        link = item.find("a", class_="chapter-name")
-        if link and (href := link.get("href")):
-            title = re.sub(r"\\s+", " ", link.get_text(strip=True))
-            # 提取章节ID和名称
-            match = re.search(r"^(第\\d+章)", title)
-            chapter_id = match.group(1) if match else ""
-            chapter_name = title[len(chapter_id) :].strip()
-
-            chapters.append(
-                {
-                    "id": chapter_id,
-                    "name": chapter_name or title,
-                    "url": "https:" + href if href.startswith("//") else href,
-                }
-            )
-    return chapters
-
-
-async def _get_remote_chapters(session: aiohttp.ClientSession, book_id: str, book_path: Path) -> list[Chapter]:
-    """从网络获取小说内容。"""
-    catalog_url = f"https://www.qidian.com/book/{book_id}/"
-    chapters_json_path = book_path / f"{book_id}.json"
-    chapters_list_dir = book_path / "list"
-    chapters_list_dir.mkdir(exist_ok=True)
-
-    catalog_html = await _fetch_url(session, catalog_url)
-    if not catalog_html:
-        return []
-
-    chapter_infos = _parse_chapters_from_html(catalog_html)
-    with open(chapters_json_path, "w", encoding="utf-8") as f:
-        json.dump(chapter_infos, f, ensure_ascii=False, indent=2)
-
-    tasks = []
-    for i, info in enumerate(chapter_infos):
-        chapter_file = chapters_list_dir / f"{i}.txt"
-        if not chapter_file.exists():
-            tasks.append(
-                _fetch_and_save_chapter(session, info["url"], chapter_file)
-            )
-
-    results = await asyncio.gather(*tasks)
-
-    chapters = []
-    for i, content in enumerate(results):
-        if content:
-            chapters.append(Chapter(index=i, content=content))
-
-    return chapters
-
-
-async def _fetch_and_save_chapter(session: aiohttp.ClientSession, url: str, path: Path):
-    """获取单个章节内容并保存。"""
-    html = await _fetch_url(session, url)
-    if not html:
-        return None
-
-    soup = BeautifulSoup(html, "html.parser")
-    main_content = soup.find("div", class_="read-content")
-    if not main_content:
-        return None
-
-    paragraphs = [p.get_text(strip=True) for p in main_content.find_all("p")]
-    content = "\n".join(filter(None, paragraphs))
-
-    path.write_text(content, encoding="utf-8")
-    return content
-
-
-def _get_local_chapters(source_file: str, book_path: Path) -> list[Chapter]:
-    """从本地TXT文件加载章节。"""
+def _load_local_content(source_file: str) -> str:
+    """从本地TXT文件加载全部内容。"""
     source_path = Path(source_file)
     if not source_path.exists():
         logger.error(f"本地文件不存在: {source_file}")
-        return []
+        # 在健壮的系统中，这里应该抛出异常而不是返回空字符串
+        raise FileNotFoundError(f"Source file not found at {source_path.resolve()}")
 
-    chapters_list_dir = book_path / "list"
-    chapters_list_dir.mkdir(exist_ok=True)
-
-    content = source_path.read_text(encoding="utf-8")
-    # 新的、更通用的正则表达式，能够匹配多种章节标题格式
-    # e.g., "第1章", "第一章", "Chapter 1", "1.", "1"
-    chapter_pattern = re.compile(
-        r"^(?:\s*)(?:第[一二三四五六七八九十百千万\d]+\s*章|Chapter\s*\d+|\d+\.?|\d+)(?:\s+.*)?$",
-        re.MULTILINE,
-    )
-
-    # 使用 finditer 找到所有章节标题的位置
-    titles = list(chapter_pattern.finditer(content))
-    
-    if not titles:
-        logger.warning("未在文件中找到章节标题，将整个文件视为一个章节。")
-        chapter = Chapter(index=0, content=content)
-        (chapters_list_dir / "0.txt").write_text(content, encoding="utf-8")
-        return [chapter]
-
-    chapters = []
-    for i, match in enumerate(titles):
-        # 跳过标题行，从标题的下一行开始
-        start_pos = match.end()
-        # 寻找换行符，确保从下一行开始
-        newline_pos = content.find('\n', start_pos)
-        if newline_pos != -1:
-            start_pos = newline_pos + 1
-        
-        # 确定章节内容的结束位置
-        end_pos = titles[i + 1].start() if i + 1 < len(titles) else len(content)
-        
-        chapter_content = content[start_pos:end_pos].strip()
-        if chapter_content:
-            chapter = Chapter(index=i, content=chapter_content)
-            chapters.append(chapter)
-            # 将分割好的章节内容写入文件，以便后续步骤可以统一处理
-            (chapters_list_dir / f"{i}.txt").write_text(
-                chapter_content, encoding="utf-8"
-            )
-
-    if not chapters:
-        logger.warning("解析章节后没有找到有效内容，将整个文件视为一个章节。")
-        chapter = Chapter(index=0, content=content)
-        chapters.append(chapter)
-        (chapters_list_dir / "0.txt").write_text(content, encoding="utf-8")
-
-    return chapters
+    logger.info(f"从 {source_path.resolve()} 读取完整文本内容...")
+    return source_path.read_text(encoding="utf-8")
 
 
-async def get_chapters(
-    session: aiohttp.ClientSession, book_id: str, source_file: Optional[str] = None
-) -> list[Chapter]:
+# 注意：函数名已更改，以准确反映其新职责和返回值
+def load_and_chunk_content(
+    book_id: str, source_file: Optional[str] = None
+) -> list[TextChunk]:
     """
-    内容获取阶段的主函数。
-    根据输入源（网络或本地）获取所有章节内容。
+    内容获取与分块阶段的主函数。
+
+    Args:
+        book_id: 书籍的唯一标识符。
+        source_file: 本地文本文件的路径。
+
+    Returns:
+        一个 TextChunk 对象的列表，代表了分割好的、准备送入下一阶段的文本块。
     """
+    # 确保本书的工作目录存在
     book_path = settings.paths.get_book_path(book_id)
     book_path.mkdir(exist_ok=True)
 
     if source_file:
         logger.info(f"从本地文件加载: {source_file}")
-        return _get_local_chapters(source_file, book_path)
+        full_text = _load_local_content(source_file)
     else:
-        logger.info(f"从网络获取书籍ID: {book_id}")
-        return await _get_remote_chapters(session, book_id, book_path)
+        # 当前重构专注于本地文件。网络逻辑可以作为未来的增强功能。
+        # raise NotImplementedError("网络内容获取功能当前未激活。")
+        logger.error("未提供源文件，且网络获取功能未激活。")
+        return []
+
+    # 委托给重构后的 chunker 模块进行分块
+    storyboard_config = settings.storyboard_llm
+    logger.info(f"开始使用 {storyboard_config.model} 的 token 限制 ({storyboard_config.max_tokens}) 进行文本分块...")
+    # 新的 chunk_text 函数返回我们需要的 List[TextChunk]
+    return chunk_text(
+        full_text,
+        token_limit=storyboard_config.max_tokens,
+        # o200k_base 是一个适用于最新模型的通用编码器
+        encoding_name="o200k_base",
+    )
 </file>
 
 <file path="app/ffmpeg_utils.py">
@@ -1548,7 +1184,8 @@ from typing import Optional
 import aiohttp
 
 from .config import settings
-from .stages import content, storyboard, assets, finalizer
+from .stages import storyboard, assets, finalizer
+from .stages.content import load_and_chunk_content # 直接导入新函数
 from .services.image_provider import PollinationsImageGenerator
 from .services.audio_provider import EdgeTTSAudioGenerator
 from loguru import logger
@@ -1602,6 +1239,26 @@ class Pipeline:
             logger.warning(f"无法加载状态文件 (可能已损坏或为空)，将重新开始: {e}")
             self.state_file_path.unlink(missing_ok=True) # 删除损坏的文件
             return None
+
+    def _reset_failed_assets(self, shots: list) -> list:
+        """重置之前失败的资产状态，以便重试。"""
+        logger.info("正在检查并重置失败的资产状态以便重试...")
+        reset_count = 0
+        for shot in shots:
+            if shot.error:
+                logger.debug(f"重置分镜 {shot.get_full_id()} 的失败状态 (原因: {shot.error})")
+                shot.error = None
+                # 清除所有资产路径，以便重新生成
+                shot.image_path = None
+                shot.audio_path = None
+                shot.video_clip_path = None
+                shot.srt_path = None
+                reset_count += 1
+        if reset_count > 0:
+            logger.info(f"已重置 {reset_count} 个失败分镜的状态，将在本次运行中重试。")
+        else:
+            logger.info("未发现失败的资产，所有内容均已是最新状态。")
+        return shots
             
     def _cleanup_state_file(self):
         """在流水线成功完成后清理状态文件。"""
@@ -1617,17 +1274,20 @@ class Pipeline:
 
         if processed_shots is None:
             logger.info("🔄 未找到有效状态文件，开始全新运行...")
-            # --- 阶段 1: 内容获取 ---
-            logger.info("🚀 开始执行: 阶段 1: 内容获取")
-            chapters = await content.get_chapters(self.session, self.book_id, self.source_file)
-            if not chapters:
-                logger.error("内容获取失败，流水线终止。")
+
+            # --- 阶段 1: 内容获取与分块 ---
+            logger.info("🚀 开始执行: 阶段 1: 内容加载与分块")
+            # 调用重构后的同步函数
+            text_chunks = load_and_chunk_content(self.book_id, self.source_file)
+            if not text_chunks:
+                logger.error("内容加载或分块失败，流水线终止。")
                 return
-            logger.info(f"✅ 完成: 阶段 1: 内容获取 | 获取到 {len(chapters)} 个章节")
-    
+            logger.info(f"✅ 完成: 阶段 1 | 内容被加载并分割为 {len(text_chunks)} 个文本块")
+
             # --- 阶段 2: 分镜与提示词生成 (并发) ---
             logger.info("🚀 开始执行: 阶段 2: 生成分镜与提示词")
-            all_shots = await storyboard.create_storyboard_for_chapters(chapters, self.book_path)
+            # 调用新的分镜生成函数，传入 text_chunks
+            all_shots = await storyboard.create_storyboard_from_chunks(text_chunks, self.book_path)
             if not all_shots:
                 logger.error("分镜生成失败，流水线终止。")
                 return
@@ -1640,6 +1300,8 @@ class Pipeline:
             processed_shots = all_shots
         else:
             logger.info(f"✅ 成功恢复运行，已加载 {len(processed_shots)} 个镜头的先前状态。")
+            # 在恢复后，重置任何之前失败的资产
+            processed_shots = self._reset_failed_assets(processed_shots)
 
         # --- 阶段 3: 资产生成 (图片、音频、视频片段) ---
         logger.info("🚀 开始执行: 阶段 3: 并行生成所有资产")
@@ -2065,29 +1727,52 @@ def _generate_video_clip_asset_sync(shot: Shot, book_path: Path) -> Shot:
 
 # --- Main Orchestrator ---
 async def generate_all_assets(
-    shots: list[Shot], book_path: Path, image_generator: PollinationsImageGenerator, audio_generator: EdgeTTSAudioGenerator, process_executor: ProcessPoolExecutor
+    shots: list[Shot],
+    book_path: Path,
+    image_generator: PollinationsImageGenerator,
+    audio_generator: EdgeTTSAudioGenerator,
+    process_executor: ProcessPoolExecutor,
 ) -> list[Shot]:
     """
     资产生成阶段的主函数。
     并发生成所有镜头的图片和音频，然后将视频合成任务分派到进程池。
     """
-    # 步骤 1: 并发生成所有I/O密集型资产（图片和音频）
+    # 步骤 1: 并发生成图片资产
     logger.info(
-        f"Starting parallel generation of I/O-bound assets (image, audio) for {len(shots)} shots..."
+        f"Starting parallel generation of image assets for {len(shots)} shots..."
     )
+    image_tasks = [
+        _generate_image_asset(shot, book_path, image_generator) for shot in shots
+    ]
+    # +++ 捕获更新后的 Shot 对象 +++
+    shots_with_images = await asyncio.gather(*image_tasks)
 
-    # We create image and audio tasks separately to handle potential errors gracefully
-    image_tasks = [_generate_image_asset(shot, book_path, image_generator) for shot in shots]
-    audio_tasks = [_generate_audio_asset(shot, book_path, audio_generator) for shot in shots]
+    # 步骤 2: 基于已更新的Shot列表，并发生成音频资产
+    logger.info(
+        f"Starting parallel generation of audio assets for {len(shots_with_images)} shots..."
+    )
+    # +++ 使用上一步的结果来创建新任务 +++
+    shots_to_process_audio = [s for s in shots_with_images if not s.error]
+    audio_tasks = [
+        _generate_audio_asset(shot, book_path, audio_generator)
+        for shot in shots_to_process_audio
+    ]
+    # +++ 再次捕获更新后的 Shot 对象 +++
+    shots_with_audio = await asyncio.gather(*audio_tasks)
+    
+    # 合并成功和失败的结果，保持列表完整性
+    processed_io_shots = {s.get_full_id(): s for s in shots_with_audio}
+    all_shots_after_io = [
+        processed_io_shots.get(s.get_full_id(), s) for s in shots_with_images
+    ]
 
-    # Await both sets of I/O tasks
-    await asyncio.gather(*image_tasks, *audio_tasks)
-
-    # 步骤 2: 将CPU密集型任务（视频合成）提交到进程池
+    # 步骤 3: 将CPU密集型任务（视频合成）提交到进程池
     logger.info("Scheduling CPU-bound assets (video clips) to process pool...")
     loop = asyncio.get_event_loop()
     cpu_tasks = []
-    for shot in shots:
+    
+    # +++ 使用经过IO处理后、状态完全更新的 Shot 列表 +++
+    for shot in all_shots_after_io:
         # run_in_executor 在一个指定的执行器（这里是进程池）中运行函数
         task = loop.run_in_executor(
             process_executor,
@@ -2098,9 +1783,9 @@ async def generate_all_assets(
         cpu_tasks.append(task)
 
     # 等待所有视频片段合成任务完成
-    processed_shots = await asyncio.gather(*cpu_tasks)
+    final_processed_shots = await asyncio.gather(*cpu_tasks)
 
-    return list(processed_shots)
+    return list(final_processed_shots)
 </file>
 
 <file path="app/stages/storyboard.py">
@@ -2111,11 +1796,10 @@ import asyncio
 from typing import Coroutine, Any
 from pathlib import Path
 
-from chonkie import SentenceChunker
 from ..config import settings
 from ..llm_client import storyboard_client, prompt_client
 from loguru import logger
-from ..models import Chapter, Shot
+from ..models import TextChunk, Shot
 
 # --- Prompts ---
 STORYBOARD_SYSTEM_PROMPT = """
@@ -2158,29 +1842,6 @@ masterpiece, best quality, highres, anime style, detailed illustration, vibrant 
 """
 
 
-def _create_semantic_chunks(content: str, max_tokens: int, model_name: str = "gpt-4o") -> list[str]:
-    """使用 chonkie.SentenceChunker 将文本分割成语义完整的块。"""
-    logger.debug(f"Creating semantic chunks, max_tokens={max_tokens}")
-    
-    # 将模型名称映射到 tiktoken 编码器名称
-    tokenizer_name = "cl100k_base"  # 适用于 gpt-4, gpt-4o, gpt-3.5-turbo 等
-    if "gpt-3.5" in model_name.lower():
-        tokenizer_name = "cl100k_base"
-    elif "gpt-4" in model_name.lower():
-        tokenizer_name = "cl100k_base"
-    
-    chunker = SentenceChunker(
-        tokenizer_or_token_counter=tokenizer_name,
-        chunk_size=max_tokens,
-        chunk_overlap=min(100, max_tokens // 4),  # 确保重叠不超过块大小的1/4
-        min_sentences_per_chunk=1
-    )
-    chunk_objects = chunker(content)
-    chunks = [chunk.text for chunk in chunk_objects]
-    logger.info(f"内容被分割为 {len(chunks)} 个语义块。")
-    return chunks
-
-
 async def _refine_shot_prompt(shot: Shot, book_path: Path) -> Shot:
     """为单个Shot对象优化生成图像的提示词"""
     # 从上一步传递的临时字段中获取英文提示词
@@ -2216,15 +1877,15 @@ async def _refine_shot_prompt(shot: Shot, book_path: Path) -> Shot:
 
 
 async def _process_single_chunk(
-    chunk: str, chapter_index: int, chunk_index: int, num_chunks: int, book_path: Path
+    chunk: TextChunk, book_path: Path, total_chunks: int
 ) -> list[Shot] | None:
     """处理单个文本块，生成原始Shots列表。所有复杂性都已移至LLM客户端。"""
     logger.info(
-        f"Processing chunk {chunk_index + 1}/{num_chunks} for chapter {chapter_index}..."
+        f"正在处理文本块 {chunk.chunk_id + 1}/{total_chunks}..."
     )
-    messages = [{"role": "user", "content": chunk}]
-    
-    storyboard_asset_path = book_path / "llm" / f"storyboard_ch{chapter_index}_chunk{chunk_index}.json"
+
+    messages = [{"role": "user", "content": chunk.text}]
+    storyboard_asset_path = book_path / "llm" / f"storyboard_chunk_{chunk.chunk_id}.json"
 
     # 客户端现在负责缓存、重试和修复。我们只需一次调用。
     response_str = await storyboard_client.chat_completion(
@@ -2233,135 +1894,86 @@ async def _process_single_chunk(
 
     if "ERROR" in response_str:
         logger.error(
-            f"Storyboard generation failed for chunk {chunk_index + 1} of chapter {chapter_index} after all retries and repairs: {response_str}"
+            f"分镜生成失败，块ID: {chunk.chunk_id}。错误: {response_str}"
         )
         # 返回 None 表示此块彻底失败
         return None
 
     try:
-        # 此时的 response_str 应该是一个有效的 JSON 字符串
         storyboard_data = json.loads(response_str)
-
-        # (处理嵌套列表的逻辑可以保留，作为最后一道防线)
         if not isinstance(storyboard_data, list):
-             if isinstance(storyboard_data, dict):
-                 found_list = False
-                 for key, value in storyboard_data.items():
-                     if isinstance(value, list):
-                         storyboard_data = value
-                         found_list = True
-                         logger.warning(
-                             f"LLM returned a dictionary, but a list was found and extracted from key '{key}'."
-                         )
-                         break
-                 if not found_list:
-                     raise json.JSONDecodeError(
-                         "Response is not a list and no list found in dictionary values",
-                         response_str,
-                         0,
-                     )
-             else:
-                 raise json.JSONDecodeError(
-                     "Response is not a list", response_str, 0
-                 )
-
-        proto_shots = []
-        for item in storyboard_data:
-            shot = Shot(
-                shot_id=-1,
-                chapter_index=chapter_index,
-                original_text=item.get("text", ""),
-                storyboard_path=storyboard_asset_path,
-            )
-            shot.temp_lens_language_en = item.get("lensLanguage_en", "")
-            proto_shots.append(shot)
-        
-        return proto_shots
-
+            raise json.JSONDecodeError("Response is not a list", response_str, 0)
     except json.JSONDecodeError as e:
-        # 这理论上不应该发生，因为客户端应该已经修复了它。
-        # 但作为防御性编程，我们记录这个意外情况。
-        logger.critical(
-            f"FATAL: LLM client returned a non-JSON string that it claimed was valid. This should not happen. Content: {response_str[:200]}... Error: {e}"
+        logger.error(
+            f"Failed to decode storyboard JSON for chunk {chunk.chunk_id}: {e}\nContent: {response_str}"
         )
-        # 将其视为彻底失败
         return None
 
+    proto_shots = []
+    for item in storyboard_data:
+        shot = Shot(
+            shot_id=-1,
+            # 我们将块的ID用作原先的章节索引，以保持数据模型的一致性
+            chapter_index=chunk.chunk_id,
+            original_text=item.get("text", ""),
+            storyboard_path=storyboard_asset_path,
+        )
+        # 恢复对 temp_lens_language_en 的赋值，这是下游步骤需要的关键数据
+        shot.temp_lens_language_en = item.get("lensLanguage_en", "")
+        proto_shots.append(shot)
 
-async def _process_chapter_content(chapter: Chapter, book_path: Path) -> list[Shot]:
-    """处理单个章节的完整内容，并发生成所有Shots并优化提示词。"""
-    storyboard_config = settings.storyboard_llm
-    content_chunks = _create_semantic_chunks(
-        chapter.content,
-        max_tokens=storyboard_config.max_tokens,
-        model_name=storyboard_config.model,
-    )
+    if not proto_shots:
+        logger.warning(f"No shots generated for chunk {chunk.chunk_id}.")
+        return None
 
-    # Step 1: Concurrently create storyboards for all chunks (Scatter)
-    # 传递 book_path
-    chunk_processing_tasks = [
-        _process_single_chunk(chunk, chapter.index, i, len(content_chunks), book_path)
-        for i, chunk in enumerate(content_chunks)
+    return proto_shots
+
+
+async def create_storyboard_from_chunks(
+    chunks: list[TextChunk], book_path: Path
+) -> list[Shot]:
+    """
+    并发处理所有文本块，为它们创建完整的分镜和提示词。
+    """
+    logger.info(f"开始为 {len(chunks)} 个文本块并发生成分镜...")
+
+    # 步骤 1: 并发为所有块生成分镜脚本 (生成 proto-shots)
+    storyboard_tasks = [
+        _process_single_chunk(chunk, book_path, total_chunks=len(chunks)) for chunk in chunks
     ]
-    results_per_chunk = await asyncio.gather(*chunk_processing_tasks)
+    results_per_chunk = await asyncio.gather(*storyboard_tasks)
 
-    # -- 新增的健壮性检查 --
+    # 步骤 2: 收集所有成功生成的 proto-shots，并处理失败的块
     proto_shots: list[Shot] = []
     for i, chunk_result in enumerate(results_per_chunk):
         if chunk_result is None:
-            # 失败不再静默！
             logger.critical(
-                f"FATAL: Chapter {chapter.index}, chunk {i} failed to process after all retries. "
-                f"This chapter will be incomplete. Please check LLM API or network status."
+                f"致命错误: 块 {i} 在所有重试后仍然处理失败。最终的视频将缺少这部分内容。"
             )
-            # 你可以在这里决定是继续生成不完整的视频，还是抛出异常中止整个流程
-            # raise RuntimeError(f"Failed to process chunk {i} of chapter {chapter.index}")
         else:
             proto_shots.extend(chunk_result)
 
     if not proto_shots:
-        logger.error(f"No shots could be generated for chapter {chapter.index}.")
+        logger.error("未能为任何文本块生成任何分镜。流水线终止。")
         return []
 
-    # Step 2: Re-number all shots FIRST to give them unique IDs (MOVED FROM STEP 3)
-    # FIX: This must happen before concurrent refinement to avoid file name conflicts
-    logger.debug(f"Re-numbering {len(proto_shots)} shots for chapter {chapter.index}...")
+    # 步骤 3: 为所有收集到的 shots 统一且唯一地编号
+    logger.debug(f"正在为 {len(proto_shots)} 个分镜进行统一编号...")
     for i, shot in enumerate(proto_shots):
         shot.shot_id = i + 1
-    # Now all shots have a unique ID (1, 2, 3, ...) instead of -1.
 
-    # Step 3: Concurrently refine prompts for all newly generated shots (Scatter)
-    logger.info(f"Refining {len(proto_shots)} prompts for chapter {chapter.index}...")
-    # Pass the re-numbered proto_shots to the refinement tasks
+    # 步骤 4: 并发为所有已编号的 shots 优化提示词
+    logger.info(f"正在为 {len(proto_shots)} 个分镜并发优化图像提示词...")
     refinement_tasks = [_refine_shot_prompt(s, book_path) for s in proto_shots]
     all_shots = await asyncio.gather(*refinement_tasks)
 
-    # Step 4: Re-numbering is no longer needed here as it was done above.
-
-    return all_shots
-
-
-async def create_storyboard_for_chapters(chapters: list[Chapter], book_path: Path) -> list[Shot]:
-    """
-    并发处理所有章节，为它们创建完整的分镜和提示词。
-    """
-    logger.info(f"Creating storyboards for {len(chapters)} chapters concurrently...")
-    # 传递 book_path
-    tasks: list[Coroutine[Any, Any, list[Shot]]] = [
-        _process_chapter_content(chapter, book_path) for chapter in chapters
-    ]
-
-    results_per_chapter = await asyncio.gather(*tasks)
-
     # Flatten the list of lists of shots into a single list
-    all_shots: list[Shot] = [
-        shot for chapter_shots in results_per_chapter for shot in chapter_shots
-    ]
-
+    # (This is no longer needed as we flattened it in step 2)
+    all_shots_list: list[Shot] = list(all_shots)
     logger.info(
-        f"Storyboard and prompting stage complete. Total shots created: {len(all_shots)}"
+        f"分镜和提示词阶段完成。总共成功创建 {len(all_shots_list)} 个分镜。"
     )
-    return all_shots
+    return all_shots_list
 </file>
 
 <file path="app/config.py">
@@ -2883,16 +2495,12 @@ dependencies = [
     "aiohttp>=3.9.3",
     "tiktoken>=0.6.0",
     "loguru>=0.7.2",
-    "chonkie[all]>=1.1.0",
     "json-repair>=0.47.7",
-]
-
-[project.optional-dependencies]
-dev = [
-    "black>=25.1.0",
     "pytest>=8.4.1",
+    "ruff>=0.12.3",
+    "black>=25.1.0",
     "pytest-asyncio>=1.0.0",
-    "ruff>=0.12.3"
+    "spacy>=3.8.7",
 ]
 
 [project.scripts]

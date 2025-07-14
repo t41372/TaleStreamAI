@@ -1,182 +1,60 @@
 # app/stages/content.py
-import asyncio
-import json
-import os
-import re
 from pathlib import Path
 from typing import Optional
 
-import aiohttp
-from bs4 import BeautifulSoup
+from loguru import logger
 
 from ..config import settings
-from loguru import logger
-from ..models import Chapter
+from ..models import TextChunk
+from ..chunker import chunk_text
 
 
-async def _fetch_url(session: aiohttp.ClientSession, url: str) -> Optional[str]:
-    """异步获取URL内容。"""
-    headers = {
-        "Cookie": os.getenv("COOKIE", ""),
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    }
-    try:
-        async with session.get(url, headers=headers, timeout=30) as response:
-            response.raise_for_status()
-            return await response.text()
-    except aiohttp.ClientError as e:
-        logger.error(f"网络请求失败: {url}, 错误: {e}")
-        return None
-
-
-def _parse_chapters_from_html(html_content: str) -> list[dict]:
-    """从目录页HTML中解析章节列表。"""
-    soup = BeautifulSoup(html_content, "html.parser")
-    volume_chapters = soup.find("ul", class_="volume-chapters")
-    if not volume_chapters:
-        return []
-
-    chapters = []
-    for item in volume_chapters.find_all("li", class_="chapter-item"):
-        link = item.find("a", class_="chapter-name")
-        if link and (href := link.get("href")):
-            title = re.sub(r"\\s+", " ", link.get_text(strip=True))
-            # 提取章节ID和名称
-            match = re.search(r"^(第\\d+章)", title)
-            chapter_id = match.group(1) if match else ""
-            chapter_name = title[len(chapter_id) :].strip()
-
-            chapters.append(
-                {
-                    "id": chapter_id,
-                    "name": chapter_name or title,
-                    "url": "https:" + href if href.startswith("//") else href,
-                }
-            )
-    return chapters
-
-
-async def _get_remote_chapters(session: aiohttp.ClientSession, book_id: str, book_path: Path) -> list[Chapter]:
-    """从网络获取小说内容。"""
-    catalog_url = f"https://www.qidian.com/book/{book_id}/"
-    chapters_json_path = book_path / f"{book_id}.json"
-    chapters_list_dir = book_path / "list"
-    chapters_list_dir.mkdir(exist_ok=True)
-
-    catalog_html = await _fetch_url(session, catalog_url)
-    if not catalog_html:
-        return []
-
-    chapter_infos = _parse_chapters_from_html(catalog_html)
-    with open(chapters_json_path, "w", encoding="utf-8") as f:
-        json.dump(chapter_infos, f, ensure_ascii=False, indent=2)
-
-    tasks = []
-    for i, info in enumerate(chapter_infos):
-        chapter_file = chapters_list_dir / f"{i}.txt"
-        if not chapter_file.exists():
-            tasks.append(
-                _fetch_and_save_chapter(session, info["url"], chapter_file)
-            )
-
-    results = await asyncio.gather(*tasks)
-
-    chapters = []
-    for i, content in enumerate(results):
-        if content:
-            chapters.append(Chapter(index=i, content=content))
-
-    return chapters
-
-
-async def _fetch_and_save_chapter(session: aiohttp.ClientSession, url: str, path: Path):
-    """获取单个章节内容并保存。"""
-    html = await _fetch_url(session, url)
-    if not html:
-        return None
-
-    soup = BeautifulSoup(html, "html.parser")
-    main_content = soup.find("div", class_="read-content")
-    if not main_content:
-        return None
-
-    paragraphs = [p.get_text(strip=True) for p in main_content.find_all("p")]
-    content = "\n".join(filter(None, paragraphs))
-
-    path.write_text(content, encoding="utf-8")
-    return content
-
-
-def _get_local_chapters(source_file: str, book_path: Path) -> list[Chapter]:
-    """从本地TXT文件加载章节。"""
+def _load_local_content(source_file: str) -> str:
+    """从本地TXT文件加载全部内容。"""
     source_path = Path(source_file)
     if not source_path.exists():
         logger.error(f"本地文件不存在: {source_file}")
-        return []
+        # 在健壮的系统中，这里应该抛出异常而不是返回空字符串
+        raise FileNotFoundError(f"Source file not found at {source_path.resolve()}")
 
-    chapters_list_dir = book_path / "list"
-    chapters_list_dir.mkdir(exist_ok=True)
-
-    content = source_path.read_text(encoding="utf-8")
-    # 新的、更通用的正则表达式，能够匹配多种章节标题格式
-    # e.g., "第1章", "第一章", "Chapter 1", "1.", "1"
-    chapter_pattern = re.compile(
-        r"^(?:\s*)(?:第[一二三四五六七八九十百千万\d]+\s*章|Chapter\s*\d+|\d+\.?|\d+)(?:\s+.*)?$",
-        re.MULTILINE,
-    )
-
-    # 使用 finditer 找到所有章节标题的位置
-    titles = list(chapter_pattern.finditer(content))
-    
-    if not titles:
-        logger.warning("未在文件中找到章节标题，将整个文件视为一个章节。")
-        chapter = Chapter(index=0, content=content)
-        (chapters_list_dir / "0.txt").write_text(content, encoding="utf-8")
-        return [chapter]
-
-    chapters = []
-    for i, match in enumerate(titles):
-        # 跳过标题行，从标题的下一行开始
-        start_pos = match.end()
-        # 寻找换行符，确保从下一行开始
-        newline_pos = content.find('\n', start_pos)
-        if newline_pos != -1:
-            start_pos = newline_pos + 1
-        
-        # 确定章节内容的结束位置
-        end_pos = titles[i + 1].start() if i + 1 < len(titles) else len(content)
-        
-        chapter_content = content[start_pos:end_pos].strip()
-        if chapter_content:
-            chapter = Chapter(index=i, content=chapter_content)
-            chapters.append(chapter)
-            # 将分割好的章节内容写入文件，以便后续步骤可以统一处理
-            (chapters_list_dir / f"{i}.txt").write_text(
-                chapter_content, encoding="utf-8"
-            )
-
-    if not chapters:
-        logger.warning("解析章节后没有找到有效内容，将整个文件视为一个章节。")
-        chapter = Chapter(index=0, content=content)
-        chapters.append(chapter)
-        (chapters_list_dir / "0.txt").write_text(content, encoding="utf-8")
-
-    return chapters
+    logger.info(f"从 {source_path.resolve()} 读取完整文本内容...")
+    return source_path.read_text(encoding="utf-8")
 
 
-async def get_chapters(
-    session: aiohttp.ClientSession, book_id: str, source_file: Optional[str] = None
-) -> list[Chapter]:
+# 注意：函数名已更改，以准确反映其新职责和返回值
+def load_and_chunk_content(
+    book_id: str, source_file: Optional[str] = None
+) -> list[TextChunk]:
     """
-    内容获取阶段的主函数。
-    根据输入源（网络或本地）获取所有章节内容。
+    内容获取与分块阶段的主函数。
+
+    Args:
+        book_id: 书籍的唯一标识符。
+        source_file: 本地文本文件的路径。
+
+    Returns:
+        一个 TextChunk 对象的列表，代表了分割好的、准备送入下一阶段的文本块。
     """
+    # 确保本书的工作目录存在
     book_path = settings.paths.get_book_path(book_id)
     book_path.mkdir(exist_ok=True)
 
     if source_file:
         logger.info(f"从本地文件加载: {source_file}")
-        return _get_local_chapters(source_file, book_path)
+        full_text = _load_local_content(source_file)
     else:
-        logger.info(f"从网络获取书籍ID: {book_id}")
-        return await _get_remote_chapters(session, book_id, book_path)
+        # 当前重构专注于本地文件。网络逻辑可以作为未来的增强功能。
+        # raise NotImplementedError("网络内容获取功能当前未激活。")
+        logger.error("未提供源文件，且网络获取功能未激活。")
+        return []
+
+    # 委托给重构后的 chunker 模块进行分块
+    storyboard_config = settings.storyboard_llm
+    logger.info(f"开始使用 {storyboard_config.model} 的 token 限制 ({storyboard_config.max_tokens}) 进行文本分块...")
+    # 新的 chunk_text 函数返回我们需要的 List[TextChunk]
+    return chunk_text(
+        full_text,
+        token_limit=storyboard_config.max_tokens,
+        # o200k_base 是一个适用于最新模型的通用编码器
+        encoding_name="o200k_base",
+    )
