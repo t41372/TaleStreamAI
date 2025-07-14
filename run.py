@@ -5,13 +5,18 @@ from pathlib import Path
 import os
 import sys
 import aiohttp
+from openai import AsyncOpenAI
 
 from loguru import logger
 
 from app.config import settings
 from app.llm_client import test_llm_connections
 from app.pipeline import Pipeline
-from app.services.image_provider import PollinationsImageGenerator
+from app.services.image_provider import (
+    PollinationsImageGenerator,
+    OpenAIImageGenerator,
+    FallbackImageGenerator,
+)
 from app.services.audio_provider import EdgeTTSAudioGenerator
 
 
@@ -70,8 +75,26 @@ async def main():
 
     # 使用依赖注入模式创建服务实例
     async with aiohttp.ClientSession() as session:
-        # 创建服务实例并注入依赖
-        image_generator = PollinationsImageGenerator(session)
+        # --- Image generators & fallback chain ---
+        openai_client = AsyncOpenAI(
+            api_key=settings.openai_image_api_key,
+            base_url=settings.openai_image_api_url,
+            timeout=settings.storyboard_llm.timeout,
+        )
+
+        # 创建各自带有专用并发控制的生成器
+        primary_gen = OpenAIImageGenerator(
+            client=openai_client,
+            model=settings.openai_image_model,
+            # 不传递semaphore，让构造器使用专用配置
+        )
+
+        secondary_gen = PollinationsImageGenerator(
+            session=session,
+            # 不传递max_concurrent，让构造器使用专用配置
+        )
+
+        image_generator = FallbackImageGenerator(primary_gen, secondary_gen)
         audio_generator = EdgeTTSAudioGenerator()
 
         # 初始化并运行流水线，注入所有依赖

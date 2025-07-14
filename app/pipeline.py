@@ -8,7 +8,7 @@ import aiohttp
 from .config import settings
 from .stages import storyboard, assets, finalizer
 from .stages.content import load_and_chunk_content # 直接导入新函数
-from .services.image_provider import PollinationsImageGenerator
+from .services.base import ImageGenerator
 from .services.audio_provider import EdgeTTSAudioGenerator
 from loguru import logger
 
@@ -23,7 +23,7 @@ class Pipeline:
         book_id: str,
         source_file: Optional[str] = None,
         session: Optional[aiohttp.ClientSession] = None,
-        image_generator: Optional[PollinationsImageGenerator] = None,
+        image_generator: Optional[ImageGenerator] = None,
         audio_generator: Optional[EdgeTTSAudioGenerator] = None,
     ):
         self.book_id = book_id
@@ -128,6 +128,11 @@ class Pipeline:
         # --- 阶段 3: 资产生成 (图片、音频、视频片段) ---
         logger.info("🚀 开始执行: 阶段 3: 并行生成所有资产")
         # 传递已处理或已加载的shots和注入的服务
+        if self.image_generator is None:
+            raise ValueError("Image generator is required but not provided")
+        if self.audio_generator is None:
+            raise ValueError("Audio generator is required but not provided")
+            
         shots_after_assets = await assets.generate_all_assets(
             processed_shots, self.book_path, self.image_generator, self.audio_generator, self.process_executor
         )

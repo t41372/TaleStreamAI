@@ -32,7 +32,7 @@ The content is organized as follows:
 <notes>
 - Some files may have been excluded based on .gitignore rules and Repomix's configuration
 - Binary files are not included in this packed representation. Please refer to the Repository Structure section for a complete list of file paths, including binary files
-- Files matching these patterns are excluded: test_novel.txt, tests/test_novel.txt, LICENSE
+- Files matching these patterns are excluded: LICENSE, tests/test_novel.txt, test_novel.txt
 - Files matching patterns in .gitignore are excluded
 - Files matching default ignore patterns are excluded
 - Files are sorted by Git change count (files with more changes are at the bottom)
@@ -47,6 +47,7 @@ app/
     audio_provider.py
     base.py
     image_provider.py
+    openai_image_provider.py
   stages/
     __init__.py
     assets.py
@@ -63,6 +64,7 @@ app/
   tool.py
 tests/
   test_chunker.py
+  test_openai_image_provider.py
 .env_old
 .env.sample
 .gitignore
@@ -74,6 +76,269 @@ run.py
 
 <files>
 This section contains the contents of the repository's files.
+
+<file path="app/services/openai_image_provider.py">
+"""OpenAI Image API generator (async).
+
+Uses the official `openai` Python SDK (already in deps) and supports       
+automatic semaphore‑based concurrency + disk‑cache via the existing 
+`cache` decorator.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import base64
+
+from loguru import logger
+from openai import AsyncOpenAI
+
+from .base import ImageGenerator
+from ..config import settings
+from ..cache import cache
+
+
+class OpenAIImageGenerator(ImageGenerator):
+    """Primary generator backed by OpenAI's images endpoint."""
+
+    def __init__(self, client: AsyncOpenAI, model: str, semaphore: asyncio.Semaphore | None = None):
+        self._client = client
+        self._model = model
+        # 如果没有提供semaphore，则使用OpenAI专用的并发设置创建一个
+        if semaphore is None:
+            from ..config import settings
+            concurrent_limit = settings.openai_image_threads
+            # 向后兼容：如果专用设置不存在，则使用通用设置
+            if concurrent_limit == 3:  # 默认值，检查是否用户设置了IMAGE_THREADS
+                concurrent_limit = settings.image_threads
+            self._sem = asyncio.Semaphore(concurrent_limit)
+            from loguru import logger
+            logger.debug(f"OpenAIImageGenerator initialized with {concurrent_limit} concurrent threads")
+        else:
+            self._sem = semaphore
+
+    @cache(settings.paths.cache_image, "binary")
+    async def generate(self, prompt: str) -> bytes:  # noqa: D401 – concrete impl
+        async with self._sem:
+            logger.debug(f"OpenAIImageGenerator → {self._model}: {prompt[:60]}…")
+
+            # Map size to valid OpenAI sizes
+            size_mapping = {
+                "1024x1024": "1024x1024",
+                "1792x1024": "1792x1024", 
+                "1024x1792": "1024x1792",
+                "1536x1024": "1536x1024",
+                "1024x1536": "1024x1536",
+                "256x256": "256x256",
+                "512x512": "512x512",
+            }
+            
+            requested_size = f"{settings.image_width}x{settings.image_height}"
+            valid_size = size_mapping.get(requested_size, "1024x1024")
+
+            resp = await self._client.images.generate(
+                model=self._model,
+                prompt=prompt,
+                n=1,
+                size=valid_size,  # type: ignore
+                response_format="b64_json",
+            )
+
+            try:
+                if not resp.data or len(resp.data) == 0:
+                    raise ValueError("No image data returned from API")
+                b64_data = resp.data[0].b64_json
+                if not b64_data:
+                    raise ValueError("Image response missing `b64_json` field")
+            except (IndexError, AttributeError):
+                raise ValueError("Image response missing `b64_json` field")
+
+            return base64.b64decode(b64_data)
+
+
+class FallbackImageGenerator(ImageGenerator):
+    """Wraps *two* generators → try primary, fallback to secondary on error."""
+
+    def __init__(self, primary: ImageGenerator, secondary: ImageGenerator):
+        self._primary = primary
+        self._secondary = secondary
+
+    async def generate(self, prompt: str) -> bytes:  # noqa: D401
+        try:
+            return await self._primary.generate(prompt)
+        except Exception as e:  # pragma: no cover – runtime fallback
+            from traceback import format_exception_only
+
+            err = "".join(format_exception_only(type(e), e)).strip()
+            logger.warning(f"Primary image gen failed → {err}. Falling back …")
+            return await self._secondary.generate(prompt)
+</file>
+
+<file path="tests/test_openai_image_provider.py">
+# tests/test_openai_image_provider.py
+import asyncio
+import base64
+from unittest.mock import AsyncMock, MagicMock, patch
+import pytest
+from openai import AsyncOpenAI
+
+from app.services.openai_image_provider import OpenAIImageGenerator, FallbackImageGenerator
+
+
+class TestOpenAIImageGenerator:
+    """Test OpenAI Image Generator functionality."""
+
+    @pytest.fixture
+    def mock_openai_client(self):
+        """Create a mock OpenAI client."""
+        client = AsyncMock(spec=AsyncOpenAI)
+        return client
+
+    @pytest.fixture
+    def semaphore(self):
+        """Create a semaphore for testing."""
+        return asyncio.Semaphore(1)
+
+    @pytest.fixture
+    def openai_generator(self, mock_openai_client, semaphore):
+        """Create an OpenAI image generator with mocked client."""
+        generator = OpenAIImageGenerator(
+            client=mock_openai_client,
+            model="dall-e-3",
+            semaphore=semaphore  # 显式传递semaphore以避免配置依赖
+        )
+        # Replace the cached generate method with a non-cached version for testing
+        async def mock_generate(prompt: str) -> bytes:
+            async with generator._sem:
+                from loguru import logger
+                from app.config import settings
+                import base64
+                
+                logger.debug(f"OpenAIImageGenerator → {generator._model}: {prompt[:60]}…")
+
+                # Map size to valid OpenAI sizes
+                size_mapping = {
+                    "1024x1024": "1024x1024",
+                    "1792x1024": "1792x1024", 
+                    "1024x1792": "1024x1792",
+                    "1536x1024": "1536x1024",
+                    "1024x1536": "1024x1536",
+                    "256x256": "256x256",
+                    "512x512": "512x512",
+                }
+                
+                requested_size = f"{settings.image_width}x{settings.image_height}"
+                valid_size = size_mapping.get(requested_size, "1024x1024")
+
+                resp = await generator._client.images.generate(
+                    model=generator._model,
+                    prompt=prompt,
+                    n=1,
+                    size=valid_size,  # type: ignore
+                    response_format="b64_json",
+                )
+
+                try:
+                    if not resp.data or len(resp.data) == 0:
+                        raise ValueError("No image data returned from API")
+                    b64_data = resp.data[0].b64_json
+                    if not b64_data:
+                        raise ValueError("Image response missing `b64_json` field")
+                except (IndexError, AttributeError):
+                    raise ValueError("Image response missing `b64_json` field")
+
+                return base64.b64decode(b64_data)
+        
+        generator.generate = mock_generate
+        return generator
+
+    async def test_generate_success(self, openai_generator, mock_openai_client):
+        """Test successful image generation."""
+        # Mock response
+        test_image_data = b"fake_image_data"
+        test_b64_data = base64.b64encode(test_image_data).decode()
+        
+        mock_response = MagicMock()
+        mock_response.data = [MagicMock()]
+        mock_response.data[0].b64_json = test_b64_data
+        
+        # Set up async mock for images.generate
+        mock_openai_client.images.generate = AsyncMock(return_value=mock_response)
+
+        # Test generation
+        result = await openai_generator.generate("test prompt")
+        
+        # Verify
+        assert result == test_image_data
+        mock_openai_client.images.generate.assert_called_once()
+
+    async def test_generate_missing_data(self, openai_generator, mock_openai_client):
+        """Test handling when API returns no data."""
+        # Mock empty response
+        mock_response = MagicMock()
+        mock_response.data = []
+        
+        # Set up async mock for images.generate
+        mock_openai_client.images.generate = AsyncMock(return_value=mock_response)
+
+        # Test generation should raise error
+        with pytest.raises(ValueError, match="No image data returned from API"):
+            await openai_generator.generate("test prompt")
+
+
+class TestFallbackImageGenerator:
+    """Test Fallback Image Generator functionality."""
+
+    @pytest.fixture
+    def primary_generator(self):
+        """Create a mock primary generator."""
+        return AsyncMock()
+
+    @pytest.fixture
+    def secondary_generator(self):
+        """Create a mock secondary generator."""
+        return AsyncMock()
+
+    @pytest.fixture
+    def fallback_generator(self, primary_generator, secondary_generator):
+        """Create a fallback generator."""
+        return FallbackImageGenerator(primary_generator, secondary_generator)
+
+    async def test_primary_success(self, fallback_generator, primary_generator, secondary_generator):
+        """Test when primary generator succeeds."""
+        test_data = b"primary_image_data"
+        primary_generator.generate.return_value = test_data
+
+        result = await fallback_generator.generate("test prompt")
+        
+        assert result == test_data
+        primary_generator.generate.assert_called_once_with("test prompt")
+        secondary_generator.generate.assert_not_called()
+
+    async def test_primary_fails_secondary_succeeds(self, fallback_generator, primary_generator, secondary_generator):
+        """Test when primary fails but secondary succeeds."""
+        test_data = b"secondary_image_data"
+        primary_generator.generate.side_effect = Exception("Primary failed")
+        secondary_generator.generate.return_value = test_data
+
+        result = await fallback_generator.generate("test prompt")
+        
+        assert result == test_data
+        primary_generator.generate.assert_called_once_with("test prompt")
+        secondary_generator.generate.assert_called_once_with("test prompt")
+
+    async def test_both_fail(self, fallback_generator, primary_generator, secondary_generator):
+        """Test when both generators fail."""
+        primary_generator.generate.side_effect = Exception("Primary failed")
+        secondary_generator.generate.side_effect = Exception("Secondary failed")
+
+        with pytest.raises(Exception, match="Secondary failed"):
+            await fallback_generator.generate("test prompt")
+</file>
+
+<file path="app/services/__init__.py">
+# app/services/__init__.py
+</file>
 
 <file path="app/chunker.py">
 """Split multilingual text into non‑overlapping chunks near a token limit.
@@ -356,10 +621,6 @@ def teardown_module(module):  # noqa: D401  # pylint: disable=missing-function-d
             pass
 </file>
 
-<file path="app/services/__init__.py">
-# app/services/__init__.py
-</file>
-
 <file path=".env_old">
 COOKIE=
 
@@ -432,10 +693,6 @@ ENTRANCE_EFFECT=True
 ENTRANCE_DURATION=0.2
 # 音频速度 (效果不好)
 AUDIO_SPEED=1.0
-</file>
-
-<file path=".python-version">
-3.13
 </file>
 
 <file path="app/services/audio_provider.py">
@@ -524,13 +781,27 @@ from .base import ImageGenerator
 from ..config import settings
 from ..cache import cache
 
+# expose OpenAI classes when imported via this module
+from .openai_image_provider import OpenAIImageGenerator, FallbackImageGenerator
+
+# Export all classes for external use
+__all__ = ["PollinationsImageGenerator", "OpenAIImageGenerator", "FallbackImageGenerator"]
+
 
 class PollinationsImageGenerator(ImageGenerator):
     """使用 Pollinations.ai API 的图像生成器实现。"""
 
-    def __init__(self, session: aiohttp.ClientSession):
-        self.semaphore = asyncio.Semaphore(settings.image_threads)
+    def __init__(self, session: aiohttp.ClientSession, max_concurrent: int | None = None):
+        # 使用专用的并发设置，如果没有提供则使用配置中的值
+        concurrent_limit = max_concurrent or settings.pollinations_image_threads
+        # 向后兼容：如果专用设置不存在，则使用通用设置
+        if concurrent_limit == settings.pollinations_image_threads and concurrent_limit == 8:
+            # 这意味着用户没有设置POLLINATIONS_IMAGE_THREADS，检查是否设置了IMAGE_THREADS
+            concurrent_limit = settings.image_threads
+        
+        self.semaphore = asyncio.Semaphore(concurrent_limit)
         self._session = session
+        logger.debug(f"PollinationsImageGenerator initialized with {concurrent_limit} concurrent threads")
 
     @cache(settings.paths.cache_image, "binary")
     async def generate(self, prompt: str) -> bytes:
@@ -543,7 +814,8 @@ class PollinationsImageGenerator(ImageGenerator):
 
             try:
                 logger.debug(f"Requesting image from URL: {url.split('?')[0]}...")
-                async with self._session.get(url, timeout=300) as response:
+                timeout = aiohttp.ClientTimeout(total=300)
+                async with self._session.get(url, timeout=timeout) as response:
                     response.raise_for_status()
                     return await response.read()
             except aiohttp.ClientError as e:
@@ -610,6 +882,266 @@ def extract_chapter_id_and_name(title):
     return "", title
 </file>
 
+<file path=".python-version">
+3.13
+</file>
+
+<file path=".env.sample">
+# TaleStreamAI 环境变量配置文件
+# 将此文件复制为 .env 并填入实际的配置值
+
+# -----------------------------------------------------------------------------
+# 通用配置
+# -----------------------------------------------------------------------------
+# 书籍源文件或URL
+BOOK_SOURCE=test_novel.txt
+# 自定义书籍ID（可选）
+CUSTOM_BOOK_ID=
+# 访问需要登录的网站时的cookie（可选）
+COOKIE=
+
+# -----------------------------------------------------------------------------
+# 大语言模型 (LLM) - 分镜生成
+# -----------------------------------------------------------------------------
+# 用于生成分镜脚本的主要LLM配置
+STORYBOARD_API_KEY=<your_api_key>
+STORYBOARD_API_URL=https://api.openai.com/v1
+STORYBOARD_MODEL=gpt-4o-mini
+STORYBOARD_MAX_TOKENS=8000
+
+# -----------------------------------------------------------------------------
+# 大语言模型 (LLM) - 图像提示词生成
+# -----------------------------------------------------------------------------
+# 用于生成图像提示词的LLM配置
+PROMPT_API_KEY=<your_api_key>
+PROMPT_API_URL=https://api.openai.com/v1
+PROMPT_MODEL=gpt-4o-mini
+PROMPT_MAX_TOKENS=8000
+
+# -----------------------------------------------------------------------------
+# 大语言模型 (LLM) - JSON 自动修复
+# -----------------------------------------------------------------------------
+# 用于在LLM返回格式错误的JSON时，自动尝试修复的专用LLM。
+# 如果留空，将默认使用分镜LLM的配置。
+JSON_REPAIR_API_KEY=<your_api_key>
+JSON_REPAIR_API_URL=https://api.openai.com/v1
+JSON_REPAIR_MODEL=gpt-4o-mini
+JSON_REPAIR_MAX_TOKENS=2048
+
+# -----------------------------------------------------------------------------
+# LLM 性能配置
+# -----------------------------------------------------------------------------
+# LLM 并发线程数
+LLM_THREADS=3
+# LLM API 请求超时时间(秒)
+LLM_TIMEOUT=120
+# LLM API 重试次数
+LLM_RETRY_ATTEMPTS=3
+
+# -----------------------------------------------------------------------------
+# 图像生成配置
+# -----------------------------------------------------------------------------
+# OpenAI Images API
+OPENAI_IMAGE_API_KEY=<your_api_key>
+OPENAI_IMAGE_API_URL=https://api.openai.com/v1
+OPENAI_IMAGE_MODEL=dall-e-3
+
+IMAGE_WIDTH=1024
+IMAGE_HEIGHT=1024
+IMAGE_STYLE_PROMPT=cinematic, dramatic lighting, detailed, illustration, anime style, 8k
+
+# 图像生成并发控制 - 各提供器单独配置
+OPENAI_IMAGE_THREADS=3          # OpenAI 有更严格的速率限制
+POLLINATIONS_IMAGE_THREADS=8    # Pollinations 可以支持更高并发
+IMAGE_THREADS=5                 # 向后兼容的通用设置
+
+# -----------------------------------------------------------------------------
+# 音频生成配置
+# -----------------------------------------------------------------------------
+# Edge TTS 语音
+EDGE_TTS_VOICE=zh-CN-YunxiNeural
+# 音频生成最大并发数
+AUDIO_THREADS=5
+
+# -----------------------------------------------------------------------------
+# 视频生成配置
+# -----------------------------------------------------------------------------
+# 视频生成线程数
+VIDEO_THREADS=4
+# 视频宽度
+VIDEO_WIDTH=750
+# 视频高度
+VIDEO_HEIGHT=1280
+
+# -----------------------------------------------------------------------------
+# 其他配置
+# -----------------------------------------------------------------------------
+# 是否开启详细日志
+VERBOSE_LOGGING=true
+</file>
+
+<file path=".gitignore">
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+data
+
+.mp4
+.env
+
+prompt_history
+</file>
+
+<file path="app/ffmpeg_utils.py">
+# app/ffmpeg_utils.py
+import subprocess
+import platform
+import os
+import functools
+from loguru import logger
+
+
+@functools.lru_cache(maxsize=None)
+def _ffmpeg_has_encoder(encoder: str) -> bool:
+    """
+    缓存化地检查 FFmpeg 是否支持指定的编码器。
+    使用 lru_cache 避免重复调用 ffmpeg 进程。
+    """
+    try:
+        result = subprocess.run(
+            ["ffmpeg", "-encoders"], capture_output=True, text=True, check=True
+        )
+        # 增加空格以确保匹配到完整的编码器名称，避免子字符串问题
+        return f" {encoder} " in result.stdout
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        return False
+
+
+@functools.lru_cache(maxsize=1)
+def get_ffmpeg_gpu_params():
+    """
+    自动检测并返回适用于当前系统的 FFmpeg GPU 加速参数。
+    使用 lru_cache 缓存结果，避免重复检测。
+
+    Returns:
+        dict: 包含 codec, preset, threads, 和 ffmpeg_params 的字典。
+    """
+    system = platform.system()
+    logger.info(f"检测操作系统: {system}")
+
+    # 检查 ffmpeg 是否存在
+    try:
+        subprocess.run(["ffmpeg", "-version"], capture_output=True, check=True)
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        logger.warning("系统中未找到 ffmpeg 或无法执行。将使用纯 CPU 编码。")
+        return {
+            "codec": "libx264",
+            "preset": "ultrafast",
+            "threads": os.cpu_count() or 2,
+            "ffmpeg_params": [],
+        }
+
+    # NVIDIA (Windows/Linux)
+    if system in ["Windows", "Linux"]:
+        try:
+            result = subprocess.run(
+                ["ffmpeg", "-hwaccels"], capture_output=True, text=True
+            )
+            if "cuda" in result.stdout:
+                logger.info("✅ 检测到 NVIDIA CUDA 支持。")
+                # 检查 h264_nvenc 编码器
+                result = subprocess.run(
+                    ["ffmpeg", "-encoders"], capture_output=True, text=True
+                )
+                if "h264_nvenc" in result.stdout:
+                    logger.info("✅ 检测到 h264_nvenc 编码器。启用 NVIDIA GPU 加速。")
+                    return {
+                        "codec": "h264_nvenc",
+                        "preset": "fast",
+                        "threads": os.cpu_count() or 2,
+                        # '-hwaccel cuda' 更多用于解码，编码器h264_nvenc会自动使用GPU。
+                        "ffmpeg_params": [],
+                    }
+        except (FileNotFoundError, subprocess.CalledProcessError):
+            pass  # ffmpeg 未找到或执行失败，继续尝试其他选项
+
+    # Apple Silicon / Intel (macOS)
+    if system == "Darwin":
+        try:
+            result = subprocess.run(
+                ["ffmpeg", "-hwaccels"], capture_output=True, text=True
+            )
+            if "videotoolbox" in result.stdout:
+                logger.info("✅ 检测到 Apple VideoToolbox 支持。")
+                
+                # 优先检查 h264, hevc, prores
+                codec_preference = ("h264", "hevc", "prores")
+                for codec_prefix in codec_preference:
+                    vt_codec = f"{codec_prefix}_videotoolbox"
+                    if _ffmpeg_has_encoder(vt_codec):
+                        logger.info(f"✅ 检测到 {vt_codec} 编码器。启用 macOS 硬件加速。")
+                        
+                        params = [
+                            "-hwaccel", "videotoolbox",
+                            "-hwaccel_output_format", "videotoolbox",
+                            "-allow_sw", "0",  # 强制硬件，失败则报错
+                        ]
+                        
+                        if codec_prefix != "prores":
+                            params.extend(["-realtime", "1"]) # 尽可能低延时
+                            params.extend(["-pix_fmt", "yuv420p"])
+                        else:
+                            # ProRes 使用不同的像素格式
+                            params.extend(["-pix_fmt", "yuv422p10le"])
+                            
+                        return {
+                            "codec": vt_codec,
+                            "preset": None,  # VideoToolbox 不使用 preset
+                            "threads": None, # 硬编不依赖此线程数
+                            "ffmpeg_params": params,
+                        }
+        except (FileNotFoundError, subprocess.CalledProcessError) as e:
+            logger.warning(f"在 macOS 上检测 VideoToolbox 时出错: {e}，将回退到 CPU。")
+            pass
+
+    # Intel Quick Sync Video (Windows/Linux)
+    if system in ["Windows", "Linux"]:
+        try:
+            result = subprocess.run(
+                ["ffmpeg", "-hwaccels"], capture_output=True, text=True
+            )
+            if "qsv" in result.stdout:
+                logger.info("✅ 检测到 Intel QSV 支持。")
+                result = subprocess.run(
+                    ["ffmpeg", "-encoders"], capture_output=True, text=True
+                )
+                if "h264_qsv" in result.stdout:
+                    logger.info("✅ 检测到 h264_qsv 编码器。启用 Intel QSV 加速。")
+                    return {
+                        "codec": "h264_qsv",
+                        "preset": "fast",
+                        "threads": os.cpu_count() or 2,
+                        "ffmpeg_params": ["-load_plugin", "hevc_hw", "-hwaccel", "qsv"],
+                    }
+        except (FileNotFoundError, subprocess.CalledProcessError):
+            pass
+
+    logger.warning("⚠️ 未检测到可用的 GPU 加速硬件。将回退到 CPU (libx264) 进行编码。")
+    return {
+        "codec": "libx264",
+        "preset": "ultrafast",
+        "threads": os.cpu_count() or 2,
+        "ffmpeg_params": [],
+    }
+</file>
+
 <file path="app/models.py">
 # app/models.py
 from dataclasses import dataclass, field
@@ -668,110 +1200,6 @@ class TextChunk:
 
     def __len__(self) -> int:
         return len(self.text)
-</file>
-
-<file path=".env.sample">
-# TaleStreamAI 环境变量配置文件
-# 将此文件复制为 .env 并填入实际的配置值
-
-# -----------------------------------------------------------------------------
-# 通用配置
-# -----------------------------------------------------------------------------
-# 书籍源文件或URL
-BOOK_SOURCE=test_novel.txt
-# 自定义书籍ID（可选）
-CUSTOM_BOOK_ID=
-# 访问需要登录的网站时的cookie（可选）
-COOKIE=
-
-# -----------------------------------------------------------------------------
-# 大语言模型 (LLM) - 分镜生成
-# -----------------------------------------------------------------------------
-# 用于生成分镜脚本的主要LLM配置
-STORYBOARD_API_KEY=<your_api_key>
-STORYBOARD_API_URL=https://api.openai.com/v1
-STORYBOARD_MODEL=gpt-4o-mini
-STORYBOARD_MAX_TOKENS=8000
-
-# -----------------------------------------------------------------------------
-# 大语言模型 (LLM) - 图像提示词生成
-# -----------------------------------------------------------------------------
-# 用于生成图像提示词的LLM配置
-PROMPT_API_KEY=<your_api_key>
-PROMPT_API_URL=https://api.openai.com/v1
-PROMPT_MODEL=gpt-4o-mini
-PROMPT_MAX_TOKENS=8000
-
-# -----------------------------------------------------------------------------
-# 大语言模型 (LLM) - JSON 自动修复
-# -----------------------------------------------------------------------------
-# 用于在LLM返回格式错误的JSON时，自动尝试修复的专用LLM。
-# 如果留空，将默认使用分镜LLM的配置。
-JSON_REPAIR_API_KEY=<your_api_key>
-JSON_REPAIR_API_URL=https://api.openai.com/v1
-JSON_REPAIR_MODEL=gpt-4o-mini
-JSON_REPAIR_MAX_TOKENS=2048
-
-# -----------------------------------------------------------------------------
-# LLM 性能配置
-# -----------------------------------------------------------------------------
-# LLM 并发线程数
-LLM_THREADS=3
-# LLM API 请求超时时间(秒)
-LLM_TIMEOUT=120
-# LLM API 重试次数
-LLM_RETRY_ATTEMPTS=3
-
-# -----------------------------------------------------------------------------
-# 图像生成配置
-# -----------------------------------------------------------------------------
-IMAGE_WIDTH=1024
-IMAGE_HEIGHT=1024
-IMAGE_STYLE_PROMPT=cinematic, dramatic lighting, detailed, illustration, anime style, 8k
-IMAGE_THREADS=1
-
-# -----------------------------------------------------------------------------
-# 音频生成配置
-# -----------------------------------------------------------------------------
-# Edge TTS 语音
-EDGE_TTS_VOICE=zh-CN-YunxiNeural
-# 音频生成最大并发数
-AUDIO_THREADS=5
-
-# -----------------------------------------------------------------------------
-# 视频生成配置
-# -----------------------------------------------------------------------------
-# 视频生成线程数
-VIDEO_THREADS=4
-# 视频宽度
-VIDEO_WIDTH=750
-# 视频高度
-VIDEO_HEIGHT=1280
-
-# -----------------------------------------------------------------------------
-# 其他配置
-# -----------------------------------------------------------------------------
-# 是否开启详细日志
-VERBOSE_LOGGING=true
-</file>
-
-<file path=".gitignore">
-# Python-generated files
-__pycache__/
-*.py[oc]
-build/
-dist/
-wheels/
-*.egg-info
-
-# Virtual environments
-.venv
-data
-
-.mp4
-.env
-
-prompt_history
 </file>
 
 <file path="app/stages/content.py">
@@ -835,119 +1263,6 @@ def load_and_chunk_content(
         # o200k_base 是一个适用于最新模型的通用编码器
         encoding_name="o200k_base",
     )
-</file>
-
-<file path="app/ffmpeg_utils.py">
-# app/ffmpeg_utils.py
-import subprocess
-import platform
-import os
-import functools
-from loguru import logger
-
-
-@functools.lru_cache(maxsize=1)
-def get_ffmpeg_gpu_params():
-    """
-    自动检测并返回适用于当前系统的 FFmpeg GPU 加速参数。
-    使用 lru_cache 缓存结果，避免重复检测。
-
-    Returns:
-        dict: 包含 codec, preset, threads, 和 ffmpeg_params 的字典。
-    """
-    system = platform.system()
-    logger.info(f"检测操作系统: {system}")
-
-    # 检查 ffmpeg 是否存在
-    try:
-        subprocess.run(["ffmpeg", "-version"], capture_output=True, check=True)
-    except (FileNotFoundError, subprocess.CalledProcessError):
-        logger.warning("系统中未找到 ffmpeg 或无法执行。将使用纯 CPU 编码。")
-        return {
-            "codec": "libx264",
-            "preset": "ultrafast",
-            "threads": os.cpu_count() or 2,
-            "ffmpeg_params": [],
-        }
-
-    # NVIDIA (Windows/Linux)
-    if system in ["Windows", "Linux"]:
-        try:
-            result = subprocess.run(
-                ["ffmpeg", "-hwaccels"], capture_output=True, text=True
-            )
-            if "cuda" in result.stdout:
-                logger.info("✅ 检测到 NVIDIA CUDA 支持。")
-                # 检查 h264_nvenc 编码器
-                result = subprocess.run(
-                    ["ffmpeg", "-encoders"], capture_output=True, text=True
-                )
-                if "h264_nvenc" in result.stdout:
-                    logger.info("✅ 检测到 h264_nvenc 编码器。启用 NVIDIA GPU 加速。")
-                    return {
-                        "codec": "h264_nvenc",
-                        "preset": "fast",
-                        "threads": os.cpu_count() or 2,
-                        # '-hwaccel cuda' 更多用于解码，编码器h264_nvenc会自动使用GPU。
-                        "ffmpeg_params": [],
-                    }
-        except (FileNotFoundError, subprocess.CalledProcessError):
-            pass  # ffmpeg 未找到或执行失败，继续尝试其他选项
-
-    # Apple Silicon / Intel (macOS)
-    if system == "Darwin":
-        try:
-            result = subprocess.run(
-                ["ffmpeg", "-hwaccels"], capture_output=True, text=True
-            )
-            if "videotoolbox" in result.stdout:
-                logger.info("✅ 检测到 Apple VideoToolbox 支持。")
-                # 检查 h264_videotoolbox 编码器
-                result = subprocess.run(
-                    ["ffmpeg", "-encoders"], capture_output=True, text=True
-                )
-                if "h264_videotoolbox" in result.stdout:
-                    logger.info(
-                        "✅ 检测到 h264_videotoolbox 编码器。启用 macOS GPU 加速。"
-                    )
-                    return {
-                        "codec": "h264_videotoolbox",
-                        "preset": "ultrafast", # VideoToolbox没有像x264那样的preset，但保留此字段以保持API一致性
-                        "threads": os.cpu_count() or 2,
-                        "ffmpeg_params": ["-b:v", "8000k"], # 为macOS编码器设置合理的比特率
-                    }
-        except (FileNotFoundError, subprocess.CalledProcessError):
-            pass
-
-    # Intel Quick Sync Video (Windows/Linux)
-    if system in ["Windows", "Linux"]:
-        try:
-            result = subprocess.run(
-                ["ffmpeg", "-hwaccels"], capture_output=True, text=True
-            )
-            if "qsv" in result.stdout:
-                logger.info("✅ 检测到 Intel QSV 支持。")
-                result = subprocess.run(
-                    ["ffmpeg", "-encoders"], capture_output=True, text=True
-                )
-                if "h264_qsv" in result.stdout:
-                    logger.info("✅ 检测到 h264_qsv 编码器。启用 Intel QSV 加速。")
-                    return {
-                        "codec": "h264_qsv",
-                        "preset": "fast",
-                        "threads": os.cpu_count() or 2,
-                        "ffmpeg_params": ["-load_plugin", "hevc_hw", "-hwaccel", "qsv"],
-                    }
-        except (FileNotFoundError, subprocess.CalledProcessError):
-            pass
-
-    logger.warning("⚠️ 未检测到可用的 GPU 加速硬件。将回退到 CPU (libx264) 进行编码。")
-    return {
-        "codec": "libx264",
-        "preset": "ultrafast",
-        "threads": os.cpu_count() or 2,
-        "ffmpeg_params": [],
-    }
 </file>
 
 <file path="app/stages/finalizer.py">
@@ -1175,165 +1490,6 @@ def cache(cache_path: Path, result_type: str = "text"):
     return decorator
 </file>
 
-<file path="app/pipeline.py">
-# app/pipeline.py
-import asyncio
-import concurrent.futures
-import pickle
-from typing import Optional
-import aiohttp
-
-from .config import settings
-from .stages import storyboard, assets, finalizer
-from .stages.content import load_and_chunk_content # 直接导入新函数
-from .services.image_provider import PollinationsImageGenerator
-from .services.audio_provider import EdgeTTSAudioGenerator
-from loguru import logger
-
-
-class Pipeline:
-    """
-    异步流水线控制器，负责编排整个视频生成过程。
-    """
-
-    def __init__(
-        self,
-        book_id: str,
-        source_file: Optional[str] = None,
-        session: Optional[aiohttp.ClientSession] = None,
-        image_generator: Optional[PollinationsImageGenerator] = None,
-        audio_generator: Optional[EdgeTTSAudioGenerator] = None,
-    ):
-        self.book_id = book_id
-        self.source_file = source_file
-        self.book_path = settings.paths.get_book_path(book_id)
-        self.state_file_path = self.book_path / "progress.pkl"
-        
-        # 依赖注入：接受外部传入的服务实例
-        self.session = session
-        self.image_generator = image_generator
-        self.audio_generator = audio_generator
-
-        # 为CPU密集型任务创建一个进程池执行器
-        self.process_executor = concurrent.futures.ProcessPoolExecutor()
-
-    def _save_state(self, shots: list):
-        """将当前的所有Shots状态序列化到文件。"""
-        try:
-            with open(self.state_file_path, "wb") as f:
-                pickle.dump(shots, f)
-            logger.info(f"💾 流水线状态已保存至: {self.state_file_path}")
-        except Exception as e:
-            logger.error(f"保存状态失败: {e}")
-
-    def _load_state(self) -> Optional[list]:
-        """从文件加载并反序列化Shots状态。"""
-        if not self.state_file_path.exists():
-            return None
-        try:
-            with open(self.state_file_path, "rb") as f:
-                shots = pickle.load(f)
-            logger.info(f"✅ 成功从 {self.state_file_path} 加载状态，即将恢复运行...")
-            return shots
-        except (pickle.UnpicklingError, EOFError, FileNotFoundError) as e:
-            logger.warning(f"无法加载状态文件 (可能已损坏或为空)，将重新开始: {e}")
-            self.state_file_path.unlink(missing_ok=True) # 删除损坏的文件
-            return None
-
-    def _reset_failed_assets(self, shots: list) -> list:
-        """重置之前失败的资产状态，以便重试。"""
-        logger.info("正在检查并重置失败的资产状态以便重试...")
-        reset_count = 0
-        for shot in shots:
-            if shot.error:
-                logger.debug(f"重置分镜 {shot.get_full_id()} 的失败状态 (原因: {shot.error})")
-                shot.error = None
-                # 清除所有资产路径，以便重新生成
-                shot.image_path = None
-                shot.audio_path = None
-                shot.video_clip_path = None
-                shot.srt_path = None
-                reset_count += 1
-        if reset_count > 0:
-            logger.info(f"已重置 {reset_count} 个失败分镜的状态，将在本次运行中重试。")
-        else:
-            logger.info("未发现失败的资产，所有内容均已是最新状态。")
-        return shots
-            
-    def _cleanup_state_file(self):
-        """在流水线成功完成后清理状态文件。"""
-        self.state_file_path.unlink(missing_ok=True)
-        logger.info("🧹 状态文件已清理。")
-
-    async def run(self):
-        """按顺序执行流水线的各个阶段"""
-        start_time = asyncio.get_event_loop().time()
-
-        # --- 尝试加载状态，实现断点续传 ---
-        processed_shots = self._load_state()
-
-        if processed_shots is None:
-            logger.info("🔄 未找到有效状态文件，开始全新运行...")
-
-            # --- 阶段 1: 内容获取与分块 ---
-            logger.info("🚀 开始执行: 阶段 1: 内容加载与分块")
-            # 调用重构后的同步函数
-            text_chunks = load_and_chunk_content(self.book_id, self.source_file)
-            if not text_chunks:
-                logger.error("内容加载或分块失败，流水线终止。")
-                return
-            logger.info(f"✅ 完成: 阶段 1 | 内容被加载并分割为 {len(text_chunks)} 个文本块")
-
-            # --- 阶段 2: 分镜与提示词生成 (并发) ---
-            logger.info("🚀 开始执行: 阶段 2: 生成分镜与提示词")
-            # 调用新的分镜生成函数，传入 text_chunks
-            all_shots = await storyboard.create_storyboard_from_chunks(text_chunks, self.book_path)
-            if not all_shots:
-                logger.error("分镜生成失败，流水线终止。")
-                return
-            logger.info(
-                f"✅ 完成: 阶段 2: 生成分镜与提示词 | 共生成 {len(all_shots)} 个分镜"
-            )
-            
-            # 第一个检查点：在LLM密集型任务后保存状态
-            self._save_state(all_shots)
-            processed_shots = all_shots
-        else:
-            logger.info(f"✅ 成功恢复运行，已加载 {len(processed_shots)} 个镜头的先前状态。")
-            # 在恢复后，重置任何之前失败的资产
-            processed_shots = self._reset_failed_assets(processed_shots)
-
-        # --- 阶段 3: 资产生成 (图片、音频、视频片段) ---
-        logger.info("🚀 开始执行: 阶段 3: 并行生成所有资产")
-        # 传递已处理或已加载的shots和注入的服务
-        shots_after_assets = await assets.generate_all_assets(
-            processed_shots, self.book_path, self.image_generator, self.audio_generator, self.process_executor
-        )
-        # 第二个检查点：在媒体资产生成后更新状态
-        self._save_state(shots_after_assets)
-        
-        successful_shots = [shot for shot in shots_after_assets if not shot.error]
-        if not successful_shots:
-            logger.error("所有资产生成失败，流水线终止。")
-            return
-        logger.info(
-            f"✅ 完成: 阶段 3: 并行生成所有资产 | 成功处理 {len(successful_shots)}/{len(shots_after_assets)} 个镜头"
-        )
-
-        # --- 阶段 4: 最终合成 ---
-        logger.info("🚀 开始执行: 阶段 4: 合成最终视频")
-        await finalizer.merge_video_clips(self.book_id, successful_shots)
-        logger.info("✅ 完成: 阶段 4: 合成最终视频")
-
-        end_time = asyncio.get_event_loop().time()
-        logger.info(f"流水线总耗时: {end_time - start_time:.2f} 秒")
-
-        # --- 清理 ---
-        self._cleanup_state_file()
-        # 优雅地关闭进程池
-        self.process_executor.shutdown()
-</file>
-
 <file path="README.md">
 # TaleStreamAI v1.0 🚀
 
@@ -1459,13 +1615,18 @@ from pathlib import Path
 import os
 import sys
 import aiohttp
+from openai import AsyncOpenAI
 
 from loguru import logger
 
 from app.config import settings
 from app.llm_client import test_llm_connections
 from app.pipeline import Pipeline
-from app.services.image_provider import PollinationsImageGenerator
+from app.services.image_provider import (
+    PollinationsImageGenerator,
+    OpenAIImageGenerator,
+    FallbackImageGenerator,
+)
 from app.services.audio_provider import EdgeTTSAudioGenerator
 
 
@@ -1524,8 +1685,26 @@ async def main():
 
     # 使用依赖注入模式创建服务实例
     async with aiohttp.ClientSession() as session:
-        # 创建服务实例并注入依赖
-        image_generator = PollinationsImageGenerator(session)
+        # --- Image generators & fallback chain ---
+        openai_client = AsyncOpenAI(
+            api_key=settings.openai_image_api_key,
+            base_url=settings.openai_image_api_url,
+            timeout=settings.storyboard_llm.timeout,
+        )
+
+        # 创建各自带有专用并发控制的生成器
+        primary_gen = OpenAIImageGenerator(
+            client=openai_client,
+            model=settings.openai_image_model,
+            # 不传递semaphore，让构造器使用专用配置
+        )
+
+        secondary_gen = PollinationsImageGenerator(
+            session=session,
+            # 不传递max_concurrent，让构造器使用专用配置
+        )
+
+        image_generator = FallbackImageGenerator(primary_gen, secondary_gen)
         audio_generator = EdgeTTSAudioGenerator()
 
         # 初始化并运行流水线，注入所有依赖
@@ -1550,10 +1729,173 @@ if __name__ == "__main__":
     asyncio.run(main())
 </file>
 
+<file path="app/pipeline.py">
+# app/pipeline.py
+import asyncio
+import concurrent.futures
+import pickle
+from typing import Optional
+import aiohttp
+
+from .config import settings
+from .stages import storyboard, assets, finalizer
+from .stages.content import load_and_chunk_content # 直接导入新函数
+from .services.base import ImageGenerator
+from .services.audio_provider import EdgeTTSAudioGenerator
+from loguru import logger
+
+
+class Pipeline:
+    """
+    异步流水线控制器，负责编排整个视频生成过程。
+    """
+
+    def __init__(
+        self,
+        book_id: str,
+        source_file: Optional[str] = None,
+        session: Optional[aiohttp.ClientSession] = None,
+        image_generator: Optional[ImageGenerator] = None,
+        audio_generator: Optional[EdgeTTSAudioGenerator] = None,
+    ):
+        self.book_id = book_id
+        self.source_file = source_file
+        self.book_path = settings.paths.get_book_path(book_id)
+        self.state_file_path = self.book_path / "progress.pkl"
+        
+        # 依赖注入：接受外部传入的服务实例
+        self.session = session
+        self.image_generator = image_generator
+        self.audio_generator = audio_generator
+
+        # 为CPU密集型任务创建一个进程池执行器
+        self.process_executor = concurrent.futures.ProcessPoolExecutor()
+
+    def _save_state(self, shots: list):
+        """将当前的所有Shots状态序列化到文件。"""
+        try:
+            with open(self.state_file_path, "wb") as f:
+                pickle.dump(shots, f)
+            logger.info(f"💾 流水线状态已保存至: {self.state_file_path}")
+        except Exception as e:
+            logger.error(f"保存状态失败: {e}")
+
+    def _load_state(self) -> Optional[list]:
+        """从文件加载并反序列化Shots状态。"""
+        if not self.state_file_path.exists():
+            return None
+        try:
+            with open(self.state_file_path, "rb") as f:
+                shots = pickle.load(f)
+            logger.info(f"✅ 成功从 {self.state_file_path} 加载状态，即将恢复运行...")
+            return shots
+        except (pickle.UnpicklingError, EOFError, FileNotFoundError) as e:
+            logger.warning(f"无法加载状态文件 (可能已损坏或为空)，将重新开始: {e}")
+            self.state_file_path.unlink(missing_ok=True) # 删除损坏的文件
+            return None
+
+    def _reset_failed_assets(self, shots: list) -> list:
+        """重置之前失败的资产状态，以便重试。"""
+        logger.info("正在检查并重置失败的资产状态以便重试...")
+        reset_count = 0
+        for shot in shots:
+            if shot.error:
+                logger.debug(f"重置分镜 {shot.get_full_id()} 的失败状态 (原因: {shot.error})")
+                shot.error = None
+                # 清除所有资产路径，以便重新生成
+                shot.image_path = None
+                shot.audio_path = None
+                shot.video_clip_path = None
+                shot.srt_path = None
+                reset_count += 1
+        if reset_count > 0:
+            logger.info(f"已重置 {reset_count} 个失败分镜的状态，将在本次运行中重试。")
+        else:
+            logger.info("未发现失败的资产，所有内容均已是最新状态。")
+        return shots
+            
+    def _cleanup_state_file(self):
+        """在流水线成功完成后清理状态文件。"""
+        self.state_file_path.unlink(missing_ok=True)
+        logger.info("🧹 状态文件已清理。")
+
+    async def run(self):
+        """按顺序执行流水线的各个阶段"""
+        start_time = asyncio.get_event_loop().time()
+
+        # --- 尝试加载状态，实现断点续传 ---
+        processed_shots = self._load_state()
+
+        if processed_shots is None:
+            logger.info("🔄 未找到有效状态文件，开始全新运行...")
+
+            # --- 阶段 1: 内容获取与分块 ---
+            logger.info("🚀 开始执行: 阶段 1: 内容加载与分块")
+            # 调用重构后的同步函数
+            text_chunks = load_and_chunk_content(self.book_id, self.source_file)
+            if not text_chunks:
+                logger.error("内容加载或分块失败，流水线终止。")
+                return
+            logger.info(f"✅ 完成: 阶段 1 | 内容被加载并分割为 {len(text_chunks)} 个文本块")
+
+            # --- 阶段 2: 分镜与提示词生成 (并发) ---
+            logger.info("🚀 开始执行: 阶段 2: 生成分镜与提示词")
+            # 调用新的分镜生成函数，传入 text_chunks
+            all_shots = await storyboard.create_storyboard_from_chunks(text_chunks, self.book_path)
+            if not all_shots:
+                logger.error("分镜生成失败，流水线终止。")
+                return
+            logger.info(
+                f"✅ 完成: 阶段 2: 生成分镜与提示词 | 共生成 {len(all_shots)} 个分镜"
+            )
+            
+            # 第一个检查点：在LLM密集型任务后保存状态
+            self._save_state(all_shots)
+            processed_shots = all_shots
+        else:
+            logger.info(f"✅ 成功恢复运行，已加载 {len(processed_shots)} 个镜头的先前状态。")
+            # 在恢复后，重置任何之前失败的资产
+            processed_shots = self._reset_failed_assets(processed_shots)
+
+        # --- 阶段 3: 资产生成 (图片、音频、视频片段) ---
+        logger.info("🚀 开始执行: 阶段 3: 并行生成所有资产")
+        # 传递已处理或已加载的shots和注入的服务
+        if self.image_generator is None:
+            raise ValueError("Image generator is required but not provided")
+        if self.audio_generator is None:
+            raise ValueError("Audio generator is required but not provided")
+            
+        shots_after_assets = await assets.generate_all_assets(
+            processed_shots, self.book_path, self.image_generator, self.audio_generator, self.process_executor
+        )
+        # 第二个检查点：在媒体资产生成后更新状态
+        self._save_state(shots_after_assets)
+        
+        successful_shots = [shot for shot in shots_after_assets if not shot.error]
+        if not successful_shots:
+            logger.error("所有资产生成失败，流水线终止。")
+            return
+        logger.info(
+            f"✅ 完成: 阶段 3: 并行生成所有资产 | 成功处理 {len(successful_shots)}/{len(shots_after_assets)} 个镜头"
+        )
+
+        # --- 阶段 4: 最终合成 ---
+        logger.info("🚀 开始执行: 阶段 4: 合成最终视频")
+        await finalizer.merge_video_clips(self.book_id, successful_shots)
+        logger.info("✅ 完成: 阶段 4: 合成最终视频")
+
+        end_time = asyncio.get_event_loop().time()
+        logger.info(f"流水线总耗时: {end_time - start_time:.2f} 秒")
+
+        # --- 清理 ---
+        self._cleanup_state_file()
+        # 优雅地关闭进程池
+        self.process_executor.shutdown()
+</file>
+
 <file path="app/stages/assets.py">
 # app/stages/assets.py
 import io
-import os
 import asyncio
 import tempfile
 from pathlib import Path
@@ -1568,7 +1910,7 @@ from loguru import logger
 
 from ..config import settings
 from ..models import Shot
-from ..services.image_provider import PollinationsImageGenerator
+from ..services.base import ImageGenerator  # get the protocol type
 from ..services.audio_provider import EdgeTTSAudioGenerator
 from ..ffmpeg_utils import get_ffmpeg_gpu_params
 
@@ -1576,7 +1918,7 @@ from ..ffmpeg_utils import get_ffmpeg_gpu_params
 
 
 # --- Image Generation (Now uses the service provider) ---
-async def _generate_image_asset(shot: Shot, book_path: Path, image_generator: PollinationsImageGenerator) -> Shot:
+async def _generate_image_asset(shot: Shot, book_path: Path, image_generator: ImageGenerator) -> Shot:
     """生成单个镜头的图片资产"""
     if shot.error:
         return shot
@@ -1729,7 +2071,7 @@ def _generate_video_clip_asset_sync(shot: Shot, book_path: Path) -> Shot:
 async def generate_all_assets(
     shots: list[Shot],
     book_path: Path,
-    image_generator: PollinationsImageGenerator,
+    image_generator: ImageGenerator,
     audio_generator: EdgeTTSAudioGenerator,
     process_executor: ProcessPoolExecutor,
 ) -> list[Shot]:
@@ -1786,6 +2128,162 @@ async def generate_all_assets(
     final_processed_shots = await asyncio.gather(*cpu_tasks)
 
     return list(final_processed_shots)
+</file>
+
+<file path="app/config.py">
+# app/config.py
+import os
+from dataclasses import dataclass, field
+from pathlib import Path
+from dotenv import load_dotenv
+
+# 在模块加载时，第一时间加载环境变量
+load_dotenv(override=True)
+
+
+def _get_bool_env(var_name: str, default: bool = False) -> bool:
+    """Helper to get boolean value from environment variables."""
+    value = os.getenv(var_name, str(default)).lower()
+    return value in ("true", "1", "t", "yes", "y")
+
+
+def _get_int_env(var_name: str, default: int) -> int:
+    """Helper to get integer value from environment variables."""
+    value = os.getenv(var_name, str(default))
+    return int(value.split("#")[0].strip())
+
+
+def _get_str_env(var_name: str, default: str) -> str:
+    """Helper to get a cleaned string value from environment variables."""
+    value = os.getenv(var_name, default)
+    return value.split("#")[0].strip()
+
+
+@dataclass(frozen=True)
+class LLMConfig:
+    """配置用于 LLM 客户端"""
+
+    api_key: str
+    base_url: str
+    model: str
+    max_tokens: int
+    timeout: int = _get_int_env("LLM_TIMEOUT", 120)
+    retry_attempts: int = _get_int_env("LLM_RETRY_ATTEMPTS", 3)
+
+
+@dataclass(frozen=True)
+class PathConfig:
+    """统一管理项目中的所有路径"""
+
+    data_dir: Path = Path("data")
+    cache_dir: Path = data_dir / "cache"
+    book_dir: Path = data_dir / "book"
+
+    # 缓存子目录 (用于通用、可丢弃的缓存)
+    cache_llm: Path = cache_dir / "llm"
+    cache_image: Path = cache_dir / "image"
+    cache_audio: Path = cache_dir / "audio"
+
+    def get_book_path(self, book_id: str) -> Path:
+        book_path = self.book_dir / book_id
+        # 在这里动态创建LLM资产目录
+        (book_path / "llm").mkdir(parents=True, exist_ok=True)
+        return book_path
+
+    def __post_init__(self):
+        """初始化后创建所有必要的目录"""
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
+        self.book_dir.mkdir(parents=True, exist_ok=True)
+        self.cache_llm.mkdir(parents=True, exist_ok=True)
+        self.cache_image.mkdir(parents=True, exist_ok=True)
+        self.cache_audio.mkdir(parents=True, exist_ok=True)
+
+
+@dataclass(frozen=True)
+class Settings:
+    """全局应用配置"""
+
+    # 书籍配置
+    book_source: str = _get_str_env("BOOK_SOURCE", "test_novel.txt")
+    custom_book_id: str | None = os.getenv(
+        "CUSTOM_BOOK_ID"
+    )  # os.getenv is ok for optional values
+    cookie: str = _get_str_env("COOKIE", "")  # 用于需要登录才能访问的网站
+
+    # LLM 配置
+    storyboard_llm: LLMConfig = field(
+        default_factory=lambda: LLMConfig(
+            api_key=_get_str_env("STORYBOARD_API_KEY", ""),
+            base_url=_get_str_env("STORYBOARD_API_URL", ""),
+            model=_get_str_env("STORYBOARD_MODEL", "gemini-1.5-flash-latest"),
+            max_tokens=_get_int_env("STORYBOARD_MAX_TOKENS", 8000),
+        )
+    )
+    prompt_llm: LLMConfig = field(
+        default_factory=lambda: LLMConfig(
+            api_key=_get_str_env("PROMPT_API_KEY", ""),
+            base_url=_get_str_env("PROMPT_API_URL", ""),
+            model=_get_str_env("PROMPT_MODEL", "deepseek-v2"),
+            max_tokens=_get_int_env("PROMPT_MAX_TOKENS", 8000),
+        )
+    )
+    # +++ 新增 JSON 修复器 LLM 配置 +++
+    json_repair_llm: LLMConfig = field(
+        default_factory=lambda: LLMConfig(
+            # 默认情况下，可以复用storyboard的配置，但最好用独立的环境变量
+            api_key=_get_str_env("JSON_REPAIR_API_KEY", _get_str_env("STORYBOARD_API_KEY", "")),
+            base_url=_get_str_env("JSON_REPAIR_API_URL", _get_str_env("STORYBOARD_API_URL", "")),
+            model=_get_str_env("JSON_REPAIR_MODEL", "gemini-1.5-flash-latest"),
+            max_tokens=_get_int_env("JSON_REPAIR_MAX_TOKENS", 2048), # 修复任务通常不需要很长的上下文
+        )
+    )
+    # +++ 结束新增部分 +++
+
+    # 图像生成配置
+    # -- NEW: OpenAI Image endpoint settings --
+    openai_image_api_key: str = _get_str_env("OPENAI_IMAGE_API_KEY", "")
+    openai_image_api_url: str = _get_str_env("OPENAI_IMAGE_API_URL", "https://api.openai.com/v1")
+    openai_image_model: str = _get_str_env("OPENAI_IMAGE_MODEL", "dall-e-3")
+
+    image_width: int = _get_int_env("IMAGE_WIDTH", 1024)
+    image_height: int = _get_int_env("IMAGE_HEIGHT", 1024)
+    image_style_prompt: str = _get_str_env(
+        "IMAGE_STYLE_PROMPT",
+        "cinematic, dramatic lighting, detailed, illustration, anime style, 8k",
+    )
+    # 各提供器的并发控制设置
+    openai_image_threads: int = _get_int_env("OPENAI_IMAGE_THREADS", 3)  # OpenAI有更严格的速率限制
+    pollinations_image_threads: int = _get_int_env("POLLINATIONS_IMAGE_THREADS", 8)  # Pollinations可以更高并发
+    # 向后兼容：如果设置了IMAGE_THREADS，则作为两者的默认值
+    image_threads: int = _get_int_env("IMAGE_THREADS", 5)  # 保持向后兼容
+
+    # 音频生成配置
+    edge_tts_voice: str = _get_str_env("EDGE_TTS_VOICE", "zh-CN-YunxiNeural")
+    audio_threads: int = _get_int_env("AUDIO_THREADS", 5)
+
+    # 视频生成配置
+    video_threads: int = _get_int_env("VIDEO_THREADS", 4)
+    video_width: int = _get_int_env("VIDEO_WIDTH", 750)
+    video_height: int = _get_int_env("VIDEO_HEIGHT", 1280)
+
+    # 性能与流程控制
+    max_llm_threads: int = _get_int_env("LLM_THREADS", 3)
+    verbose_logging: bool = _get_bool_env("VERBOSE_LOGGING", True)
+
+    # 路径配置
+    paths: PathConfig = field(default_factory=PathConfig)
+
+    @property
+    def book_id(self) -> str:
+        if self.custom_book_id:
+            return self.custom_book_id
+        if self.book_source.endswith(".txt"):
+            return Path(self.book_source).stem
+        return self.book_source
+
+
+# 创建一个全局单例配置对象
+settings = Settings()
 </file>
 
 <file path="app/stages/storyboard.py">
@@ -1974,153 +2472,6 @@ async def create_storyboard_from_chunks(
         f"分镜和提示词阶段完成。总共成功创建 {len(all_shots_list)} 个分镜。"
     )
     return all_shots_list
-</file>
-
-<file path="app/config.py">
-# app/config.py
-import os
-from dataclasses import dataclass, field
-from pathlib import Path
-from dotenv import load_dotenv
-
-# 在模块加载时，第一时间加载环境变量
-load_dotenv(override=True)
-
-
-def _get_bool_env(var_name: str, default: bool = False) -> bool:
-    """Helper to get boolean value from environment variables."""
-    value = os.getenv(var_name, str(default)).lower()
-    return value in ("true", "1", "t", "yes", "y")
-
-
-def _get_int_env(var_name: str, default: int) -> int:
-    """Helper to get integer value from environment variables."""
-    value = os.getenv(var_name, str(default))
-    return int(value.split("#")[0].strip())
-
-
-def _get_str_env(var_name: str, default: str) -> str:
-    """Helper to get a cleaned string value from environment variables."""
-    value = os.getenv(var_name, default)
-    return value.split("#")[0].strip()
-
-
-@dataclass(frozen=True)
-class LLMConfig:
-    """配置用于 LLM 客户端"""
-
-    api_key: str
-    base_url: str
-    model: str
-    max_tokens: int
-    timeout: int = _get_int_env("LLM_TIMEOUT", 120)
-    retry_attempts: int = _get_int_env("LLM_RETRY_ATTEMPTS", 3)
-
-
-@dataclass(frozen=True)
-class PathConfig:
-    """统一管理项目中的所有路径"""
-
-    data_dir: Path = Path("data")
-    cache_dir: Path = data_dir / "cache"
-    book_dir: Path = data_dir / "book"
-
-    # 缓存子目录 (用于通用、可丢弃的缓存)
-    cache_llm: Path = cache_dir / "llm"
-    cache_image: Path = cache_dir / "image"
-    cache_audio: Path = cache_dir / "audio"
-
-    def get_book_path(self, book_id: str) -> Path:
-        book_path = self.book_dir / book_id
-        # 在这里动态创建LLM资产目录
-        (book_path / "llm").mkdir(parents=True, exist_ok=True)
-        return book_path
-
-    def __post_init__(self):
-        """初始化后创建所有必要的目录"""
-        self.cache_dir.mkdir(parents=True, exist_ok=True)
-        self.book_dir.mkdir(parents=True, exist_ok=True)
-        self.cache_llm.mkdir(parents=True, exist_ok=True)
-        self.cache_image.mkdir(parents=True, exist_ok=True)
-        self.cache_audio.mkdir(parents=True, exist_ok=True)
-
-
-@dataclass(frozen=True)
-class Settings:
-    """全局应用配置"""
-
-    # 书籍配置
-    book_source: str = _get_str_env("BOOK_SOURCE", "test_novel.txt")
-    custom_book_id: str | None = os.getenv(
-        "CUSTOM_BOOK_ID"
-    )  # os.getenv is ok for optional values
-    cookie: str = _get_str_env("COOKIE", "")  # 用于需要登录才能访问的网站
-
-    # LLM 配置
-    storyboard_llm: LLMConfig = field(
-        default_factory=lambda: LLMConfig(
-            api_key=_get_str_env("STORYBOARD_API_KEY", ""),
-            base_url=_get_str_env("STORYBOARD_API_URL", ""),
-            model=_get_str_env("STORYBOARD_MODEL", "gemini-1.5-flash-latest"),
-            max_tokens=_get_int_env("STORYBOARD_MAX_TOKENS", 8000),
-        )
-    )
-    prompt_llm: LLMConfig = field(
-        default_factory=lambda: LLMConfig(
-            api_key=_get_str_env("PROMPT_API_KEY", ""),
-            base_url=_get_str_env("PROMPT_API_URL", ""),
-            model=_get_str_env("PROMPT_MODEL", "deepseek-v2"),
-            max_tokens=_get_int_env("PROMPT_MAX_TOKENS", 8000),
-        )
-    )
-    # +++ 新增 JSON 修复器 LLM 配置 +++
-    json_repair_llm: LLMConfig = field(
-        default_factory=lambda: LLMConfig(
-            # 默认情况下，可以复用storyboard的配置，但最好用独立的环境变量
-            api_key=_get_str_env("JSON_REPAIR_API_KEY", _get_str_env("STORYBOARD_API_KEY", "")),
-            base_url=_get_str_env("JSON_REPAIR_API_URL", _get_str_env("STORYBOARD_API_URL", "")),
-            model=_get_str_env("JSON_REPAIR_MODEL", "gemini-1.5-flash-latest"),
-            max_tokens=_get_int_env("JSON_REPAIR_MAX_TOKENS", 2048), # 修复任务通常不需要很长的上下文
-        )
-    )
-    # +++ 结束新增部分 +++
-
-    # 图像生成配置
-    image_width: int = _get_int_env("IMAGE_WIDTH", 1024)
-    image_height: int = _get_int_env("IMAGE_HEIGHT", 1024)
-    image_style_prompt: str = _get_str_env(
-        "IMAGE_STYLE_PROMPT",
-        "cinematic, dramatic lighting, detailed, illustration, anime style, 8k",
-    )
-    image_threads: int = _get_int_env("IMAGE_THREADS", 1)
-
-    # 音频生成配置
-    edge_tts_voice: str = _get_str_env("EDGE_TTS_VOICE", "zh-CN-YunxiNeural")
-    audio_threads: int = _get_int_env("AUDIO_THREADS", 5)
-
-    # 视频生成配置
-    video_threads: int = _get_int_env("VIDEO_THREADS", 4)
-    video_width: int = _get_int_env("VIDEO_WIDTH", 750)
-    video_height: int = _get_int_env("VIDEO_HEIGHT", 1280)
-
-    # 性能与流程控制
-    max_llm_threads: int = _get_int_env("LLM_THREADS", 3)
-    verbose_logging: bool = _get_bool_env("VERBOSE_LOGGING", True)
-
-    # 路径配置
-    paths: PathConfig = field(default_factory=PathConfig)
-
-    @property
-    def book_id(self) -> str:
-        if self.custom_book_id:
-            return self.custom_book_id
-        if self.book_source.endswith(".txt"):
-            return Path(self.book_source).stem
-        return self.book_source
-
-
-# 创建一个全局单例配置对象
-settings = Settings()
 </file>
 
 <file path="app/llm_client.py">

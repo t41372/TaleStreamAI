@@ -6,6 +6,22 @@ import functools
 from loguru import logger
 
 
+@functools.lru_cache(maxsize=None)
+def _ffmpeg_has_encoder(encoder: str) -> bool:
+    """
+    缓存化地检查 FFmpeg 是否支持指定的编码器。
+    使用 lru_cache 避免重复调用 ffmpeg 进程。
+    """
+    try:
+        result = subprocess.run(
+            ["ffmpeg", "-encoders"], capture_output=True, text=True, check=True
+        )
+        # 增加空格以确保匹配到完整的编码器名称，避免子字符串问题
+        return f" {encoder} " in result.stdout
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        return False
+
+
 @functools.lru_cache(maxsize=1)
 def get_ffmpeg_gpu_params():
     """
@@ -62,21 +78,31 @@ def get_ffmpeg_gpu_params():
             )
             if "videotoolbox" in result.stdout:
                 logger.info("✅ 检测到 Apple VideoToolbox 支持。")
-                # 检查 h264_videotoolbox 编码器
-                result = subprocess.run(
-                    ["ffmpeg", "-encoders"], capture_output=True, text=True
-                )
-                if "h264_videotoolbox" in result.stdout:
-                    logger.info(
-                        "✅ 检测到 h264_videotoolbox 编码器。启用 macOS GPU 加速。"
-                    )
-                    return {
-                        "codec": "h264_videotoolbox",
-                        "preset": "ultrafast", # VideoToolbox没有像x264那样的preset，但保留此字段以保持API一致性
-                        "threads": os.cpu_count() or 2,
-                        "ffmpeg_params": ["-b:v", "8000k"], # 为macOS编码器设置合理的比特率
-                    }
-        except (FileNotFoundError, subprocess.CalledProcessError):
+                
+                # 优先检查 h264, hevc, prores
+                codec_preference = ("h264", "hevc", "prores")
+                for codec_prefix in codec_preference:
+                    vt_codec = f"{codec_prefix}_videotoolbox"
+                    if _ffmpeg_has_encoder(vt_codec):
+                        logger.info(f"✅ 检测到 {vt_codec} 编码器。启用 macOS 硬件加速。")
+                        
+                        # -hwaccel 是解码参数，不适用于此处的编码场景
+                        params = []
+                        
+                        if codec_prefix != "prores":
+                            params.extend(["-pix_fmt", "yuv420p"])
+                        else:
+                            # ProRes 使用不同的像素格式
+                            params.extend(["-pix_fmt", "yuv422p10le"])
+                            
+                        return {
+                            "codec": vt_codec,
+                            "preset": "ultrafast",  # VideoToolbox 不使用 preset, 但 moviepy 需要一个值
+                            "threads": None, # 硬编不依赖此线程数
+                            "ffmpeg_params": params,
+                        }
+        except (FileNotFoundError, subprocess.CalledProcessError) as e:
+            logger.warning(f"在 macOS 上检测 VideoToolbox 时出错: {e}，将回退到 CPU。")
             pass
 
     # Intel Quick Sync Video (Windows/Linux)

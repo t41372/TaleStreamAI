@@ -107,13 +107,22 @@ class Settings:
     # +++ 结束新增部分 +++
 
     # 图像生成配置
+    # -- NEW: OpenAI Image endpoint settings --
+    openai_image_api_key: str = _get_str_env("OPENAI_IMAGE_API_KEY", "")
+    openai_image_api_url: str = _get_str_env("OPENAI_IMAGE_API_URL", "https://api.openai.com/v1")
+    openai_image_model: str = _get_str_env("OPENAI_IMAGE_MODEL", "dall-e-3")
+
     image_width: int = _get_int_env("IMAGE_WIDTH", 1024)
     image_height: int = _get_int_env("IMAGE_HEIGHT", 1024)
     image_style_prompt: str = _get_str_env(
         "IMAGE_STYLE_PROMPT",
         "cinematic, dramatic lighting, detailed, illustration, anime style, 8k",
     )
-    image_threads: int = _get_int_env("IMAGE_THREADS", 1)
+    # 各提供器的并发控制设置
+    openai_image_threads: int = _get_int_env("OPENAI_IMAGE_THREADS", 3)  # OpenAI有更严格的速率限制
+    pollinations_image_threads: int = _get_int_env("POLLINATIONS_IMAGE_THREADS", 8)  # Pollinations可以更高并发
+    # 向后兼容：如果设置了IMAGE_THREADS，则作为两者的默认值
+    image_threads: int = _get_int_env("IMAGE_THREADS", 5)  # 保持向后兼容
 
     # 音频生成配置
     edge_tts_voice: str = _get_str_env("EDGE_TTS_VOICE", "zh-CN-YunxiNeural")

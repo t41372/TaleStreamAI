@@ -1,6 +1,5 @@
 # app/stages/assets.py
 import io
-import os
 import asyncio
 import tempfile
 from pathlib import Path
@@ -15,7 +14,7 @@ from loguru import logger
 
 from ..config import settings
 from ..models import Shot
-from ..services.image_provider import PollinationsImageGenerator
+from ..services.base import ImageGenerator  # get the protocol type
 from ..services.audio_provider import EdgeTTSAudioGenerator
 from ..ffmpeg_utils import get_ffmpeg_gpu_params
 
@@ -23,7 +22,7 @@ from ..ffmpeg_utils import get_ffmpeg_gpu_params
 
 
 # --- Image Generation (Now uses the service provider) ---
-async def _generate_image_asset(shot: Shot, book_path: Path, image_generator: PollinationsImageGenerator) -> Shot:
+async def _generate_image_asset(shot: Shot, book_path: Path, image_generator: ImageGenerator) -> Shot:
     """生成单个镜头的图片资产"""
     if shot.error:
         return shot
@@ -176,7 +175,7 @@ def _generate_video_clip_asset_sync(shot: Shot, book_path: Path) -> Shot:
 async def generate_all_assets(
     shots: list[Shot],
     book_path: Path,
-    image_generator: PollinationsImageGenerator,
+    image_generator: ImageGenerator,
     audio_generator: EdgeTTSAudioGenerator,
     process_executor: ProcessPoolExecutor,
 ) -> list[Shot]:
