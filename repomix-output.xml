@@ -32,7 +32,7 @@ The content is organized as follows:
 <notes>
 - Some files may have been excluded based on .gitignore rules and Repomix's configuration
 - Binary files are not included in this packed representation. Please refer to the Repository Structure section for a complete list of file paths, including binary files
-- Files matching these patterns are excluded: test_novel.txt, LICENSE
+- Files matching these patterns are excluded: LICENSE
 - Files matching patterns in .gitignore are excluded
 - Files matching default ignore patterns are excluded
 - Files are sorted by Git change count (files with more changes are at the bottom)
@@ -67,13 +67,183 @@ app/
 pyproject.toml
 README.md
 run.py
+test_chunking.py
+test_novel.txt
 </directory_structure>
 
 <files>
 This section contains the contents of the repository's files.
 
+<file path="test_chunking.py">
+#!/usr/bin/env python3
+
+import sys
+from pathlib import Path
+from chonkie import SentenceChunker
+
+# Add the app directory to the Python path
+sys.path.insert(0, str(Path(__file__).parent / "app"))
+
+from app.stages.storyboard import _create_semantic_chunks
+
+def test_chunking():
+    # Read the test novel
+    with open("test_novel.txt", "r", encoding="utf-8") as f:
+        content = f.read()
+    
+    print("=" * 50)
+    print("原始文本开头 (前200个字符):")
+    print(content[:200])
+    print("=" * 50)
+    
+    # Test our chunking function
+    chunks = _create_semantic_chunks(content, max_tokens=2500, model_name="gpt-4o")
+    
+    print(f"\n生成了 {len(chunks)} 个分块")
+    print("=" * 50)
+    
+    for i, chunk in enumerate(chunks):
+        print(f"分块 {i+1}:")
+        print(f"长度: {len(chunk)} 字符")
+        print(f"开头: {chunk[:100]}...")
+        print(f"结尾: ...{chunk[-100:]}")
+        print("-" * 30)
+    
+    # Test direct chonkie usage
+    print("\n" + "=" * 50)
+    print("直接使用 chonkie 测试:")
+    
+    chunker = SentenceChunker(
+        tokenizer_or_token_counter="cl100k_base",
+        chunk_size=2500,
+        chunk_overlap=min(100, 2500 // 4),
+        min_sentences_per_chunk=1
+    )
+    
+    chunk_objects = chunker(content)
+    direct_chunks = [chunk.text for chunk in chunk_objects]
+    
+    print(f"直接使用 chonkie 生成了 {len(direct_chunks)} 个分块")
+    for i, chunk in enumerate(direct_chunks):
+        print(f"分块 {i+1}:")
+        print(f"长度: {len(chunk)} 字符")
+        print(f"开头: {chunk[:100]}...")
+        print(f"结尾: ...{chunk[-100:]}")
+        print("-" * 30)
+    
+    # Compare first chunks
+    print("\n" + "=" * 50)
+    print("比较第一个分块:")
+    print(f"我们的函数结果开头: {chunks[0][:50]}...")
+    print(f"直接 chonkie 结果开头: {direct_chunks[0][:50]}...")
+    
+    # Check if there's any content loss
+    combined_chunks = "".join(chunks)
+    combined_direct = "".join(direct_chunks)
+    
+    print(f"\n原始文本长度: {len(content)}")
+    print(f"我们的函数合并后长度: {len(combined_chunks)}")
+    print(f"直接 chonkie 合并后长度: {len(combined_direct)}")
+    
+    if len(combined_chunks) != len(content):
+        print("⚠️  警告：我们的函数可能丢失了内容！")
+    
+    if len(combined_direct) != len(content):
+        print("⚠️  警告：直接 chonkie 可能丢失了内容！")
+    
+    # Check overlaps
+    print(f"\n检查重叠:")
+    for i in range(len(chunks) - 1):
+        overlap_start = chunks[i][-50:]
+        overlap_end = chunks[i+1][:50]
+        print(f"分块 {i+1} 末尾: ...{overlap_start}")
+        print(f"分块 {i+2} 开头: {overlap_end}...")
+        print("-" * 20)
+
+if __name__ == "__main__":
+    test_chunking()
+</file>
+
 <file path="app/services/__init__.py">
 # app/services/__init__.py
+</file>
+
+<file path=".env_old">
+COOKIE=
+
+# 大模型配置 - OpenAI兼容格式
+# 用於分鏡生成的模型配置
+STORYBOARD_API_KEY=sk-T9Ki5vObbywYlNc6lda4dx6rVCvoRf3Y3R8zyIQA3IBdhofG
+STORYBOARD_API_URL=https://tbai.xin/v1
+STORYBOARD_MODEL=deepseek-r1
+
+# 用於圖片提示詞生成的模型配置
+PROMPT_API_KEY=sk-T9Ki5vObbywYlNc6lda4dx6rVCvoRf3Y3R8zyIQA3IBdhofG
+PROMPT_API_URL=https://tbai.xin/v1
+PROMPT_MODEL=deepseek-v3
+
+# LLM 並發配置
+# LLM API 最大並發數
+LLM_THREADS=50
+# LLM API 請求超時時間(秒)
+LLM_TIMEOUT=120
+# LLM API 重試次數
+LLM_RETRY_ATTEMPTS=3
+# 是否開啟詳細日誌
+VERBOSE_LOGGING=true
+
+# 備用：阿里雲通義千問配置 (兼容模式)
+AL_API_KEY=jojokey
+AL_API_URL=https://small-worm-50.deno.dev/api/v1
+
+# 備用：Gemini API配置
+GEMINI_API_KEY=
+GEMINI_API_URL=https://generativelanguage.googleapis.com/v1beta/openai/
+
+# 文生图配置 - 使用 Flux API
+FLUX_WIDTH=1024
+FLUX_HEIGHT=768
+FLUX_MODEL=flux
+FLUX_SEED=
+FLUX_ENHANCE=false
+
+# 高清修复配置
+UPSCALY_ENABLE=false
+UPSCAYL_SCALE=4
+UPSCAYL_MODEL=realesr-animevideov3-x4
+UPSCALY_FILE_TYPE=jpg
+
+# Edge TTS 配置
+# Edge TTS 语音
+EDGE_TTS_VOICE=zh-CN-YunxiNeural
+# 音频生成最大并发数
+AUDIO_THREADS=5
+# 是否使用异步音频生成
+USE_ASYNC_AUDIO=true
+
+# 分段视频生成配置
+# 视频生成线程数
+VIDEO_THREADS=4         
+# 是否是竖屏模式
+PORTRAIT_MODE=True
+# 视频宽度
+VIDEO_WIDTH=1080
+# 视频高度
+VIDEO_HEIGHT=1920
+# 移动距离 倍率
+MOVE_DISTANCE=0.2
+# 移动速度
+MOVE_SPEED=1.0
+# 入场效果
+ENTRANCE_EFFECT=True
+# 入场持续时间
+ENTRANCE_DURATION=0.2
+# 音频速度 (效果不好)
+AUDIO_SPEED=1.0
+</file>
+
+<file path=".python-version">
+3.12
 </file>
 
 <file path="app/services/audio_provider.py">
@@ -191,84 +361,6 @@ class PollinationsImageGenerator(ImageGenerator):
                 raise
 </file>
 
-<file path=".env_old">
-COOKIE=
-
-# 大模型配置 - OpenAI兼容格式
-# 用於分鏡生成的模型配置
-STORYBOARD_API_KEY=sk-T9Ki5vObbywYlNc6lda4dx6rVCvoRf3Y3R8zyIQA3IBdhofG
-STORYBOARD_API_URL=https://tbai.xin/v1
-STORYBOARD_MODEL=deepseek-r1
-
-# 用於圖片提示詞生成的模型配置
-PROMPT_API_KEY=sk-T9Ki5vObbywYlNc6lda4dx6rVCvoRf3Y3R8zyIQA3IBdhofG
-PROMPT_API_URL=https://tbai.xin/v1
-PROMPT_MODEL=deepseek-v3
-
-# LLM 並發配置
-# LLM API 最大並發數
-LLM_THREADS=50
-# LLM API 請求超時時間(秒)
-LLM_TIMEOUT=120
-# LLM API 重試次數
-LLM_RETRY_ATTEMPTS=3
-# 是否開啟詳細日誌
-VERBOSE_LOGGING=true
-
-# 備用：阿里雲通義千問配置 (兼容模式)
-AL_API_KEY=jojokey
-AL_API_URL=https://small-worm-50.deno.dev/api/v1
-
-# 備用：Gemini API配置
-GEMINI_API_KEY=
-GEMINI_API_URL=https://generativelanguage.googleapis.com/v1beta/openai/
-
-# 文生图配置 - 使用 Flux API
-FLUX_WIDTH=1024
-FLUX_HEIGHT=768
-FLUX_MODEL=flux
-FLUX_SEED=
-FLUX_ENHANCE=false
-
-# 高清修复配置
-UPSCALY_ENABLE=false
-UPSCAYL_SCALE=4
-UPSCAYL_MODEL=realesr-animevideov3-x4
-UPSCALY_FILE_TYPE=jpg
-
-# Edge TTS 配置
-# Edge TTS 语音
-EDGE_TTS_VOICE=zh-CN-YunxiNeural
-# 音频生成最大并发数
-AUDIO_THREADS=5
-# 是否使用异步音频生成
-USE_ASYNC_AUDIO=true
-
-# 分段视频生成配置
-# 视频生成线程数
-VIDEO_THREADS=4         
-# 是否是竖屏模式
-PORTRAIT_MODE=True
-# 视频宽度
-VIDEO_WIDTH=1080
-# 视频高度
-VIDEO_HEIGHT=1920
-# 移动距离 倍率
-MOVE_DISTANCE=0.2
-# 移动速度
-MOVE_SPEED=1.0
-# 入场效果
-ENTRANCE_EFFECT=True
-# 入场持续时间
-ENTRANCE_DURATION=0.2
-# 音频速度 (效果不好)
-AUDIO_SPEED=1.0
-</file>
-
-<file path=".python-version">
-3.12
-</file>
-
 <file path="app/stages/__init__.py">
 # This file makes the 'stages' directory a Python package.
 </file>
@@ -327,102 +419,601 @@ def extract_chapter_id_and_name(title):
 </file>
 
 <file path=".env.sample">
-# -----------------------------------------------------------------------------
-# 通用设置 (General Settings)
-# -----------------------------------------------------------------------------
+# TaleStreamAI 环境变量配置文件
+# 将此文件复制为 .env 并填入实际的配置值
 
-# 书籍来源：可以是起点ID或本地.txt文件路径 (默认为: test_novel.txt)
+# -----------------------------------------------------------------------------
+# 通用配置
+# -----------------------------------------------------------------------------
+# 书籍源文件或URL
 BOOK_SOURCE=test_novel.txt
-
-# 为本地文件指定一个自定义的书籍ID (默认为文件名)，用于区分不同的项目文件夹
-# CUSTOM_BOOK_ID=my-epic-story
-
-# 如果需要爬取需要登录的网站（如起点），请在此填入你的Cookie
+# 自定义书籍ID（可选）
+CUSTOM_BOOK_ID=
+# 访问需要登录的网站时的cookie（可选）
 COOKIE=
 
 # -----------------------------------------------------------------------------
-# 大语言模型 (LLM) - 分镜生成 (Storyboard Generation)
+# 大语言模型 (LLM) - 分镜生成
 # -----------------------------------------------------------------------------
-# 用于将小说原文转换成结构化分镜脚本的LLM
-
-STORYBOARD_API_KEY=<api_key>
-STORYBOARD_API_URL=https://tbai.xin/v1
-STORYBOARD_MODEL=deepseek-r1
-
-# 分镜LLM处理文本时，用于分块的最大token数 (默认为: 8000)
-# 根据你使用的模型上下文窗口大小进行调整
-STORYBOARD_MAX_TOKENS=4000
+# 用于生成分镜脚本的主要LLM配置
+STORYBOARD_API_KEY=<your_api_key>
+STORYBOARD_API_URL=https://api.openai.com/v1
+STORYBOARD_MODEL=gpt-4o-mini
+STORYBOARD_MAX_TOKENS=8000
 
 # -----------------------------------------------------------------------------
-# 大语言模型 (LLM) - 提示词优化 (Prompt Refinement)
+# 大语言模型 (LLM) - 图像提示词生成
 # -----------------------------------------------------------------------------
-# 用于将中文镜头语言优化成高质量英文AI绘画提示词的LLM
-
-PROMPT_API_KEY=<api_key>
-PROMPT_API_URL=https://tbai.xin/v1
-PROMPT_MODEL=deepseek-v3
-
-# 提示词优化LLM的最大token数 (默认为: 8000)
-# PROMPT_MAX_TOKENS=8000
+# 用于生成图像提示词的LLM配置
+PROMPT_API_KEY=<your_api_key>
+PROMPT_API_URL=https://api.openai.com/v1
+PROMPT_MODEL=gpt-4o-mini
+PROMPT_MAX_TOKENS=8000
 
 # -----------------------------------------------------------------------------
-# 大语言模型 (LLM) - 性能与网络 (Performance & Network)
+# 大语言模型 (LLM) - JSON 自动修复
 # -----------------------------------------------------------------------------
+# 用于在LLM返回格式错误的JSON时，自动尝试修复的专用LLM。
+# 如果留空，将默认使用分镜LLM的配置。
+JSON_REPAIR_API_KEY=<your_api_key>
+JSON_REPAIR_API_URL=https://api.openai.com/v1
+JSON_REPAIR_MODEL=gpt-4o-mini
+JSON_REPAIR_MAX_TOKENS=2048
 
-# 所有LLM API调用的最大并发线程数 (默认为: 3)
-LLM_THREADS=30
-
-# LLM API 请求超时时间(秒) (默认为: 120)
+# -----------------------------------------------------------------------------
+# LLM 性能配置
+# -----------------------------------------------------------------------------
+# LLM 并发线程数
+LLM_THREADS=3
+# LLM API 请求超时时间(秒)
 LLM_TIMEOUT=120
-
-# LLM API 请求失败后的重试次数 (默认为: 3)
+# LLM API 重试次数
 LLM_RETRY_ATTEMPTS=3
 
 # -----------------------------------------------------------------------------
-# 图像生成 (Image Generation)
+# 图像生成配置
 # -----------------------------------------------------------------------------
-
-# 生成图片的宽度 (默认为: 1024)
 IMAGE_WIDTH=1024
-
-# 生成图片的高度 (默认为: 1024)
-IMAGE_HEIGHT=1440
-
-# 全局追加到每个图像提示词后的风格修饰词
-IMAGE_STYLE_PROMPT="cinematic, anime sytle, lighting, detailed, illustration, 8k"
-
-# 图像生成并发限制
+IMAGE_HEIGHT=1024
+IMAGE_STYLE_PROMPT=cinematic, dramatic lighting, detailed, illustration, anime style, 8k
 IMAGE_THREADS=1
 
 # -----------------------------------------------------------------------------
-# 音频生成 (Audio Generation)
+# 音频生成配置
 # -----------------------------------------------------------------------------
-
-# Edge TTS 使用的语音 (默认为: zh-CN-YunxiNeural)
+# Edge TTS 语音
 EDGE_TTS_VOICE=zh-CN-YunxiNeural
-
-# 音频生成任务的最大并发数 (默认为: 5)
+# 音频生成最大并发数
 AUDIO_THREADS=5
 
 # -----------------------------------------------------------------------------
-# 视频合成 (Video Synthesis)
+# 视频生成配置
 # -----------------------------------------------------------------------------
-
-# 使用moviepy合成视频片段时的线程数 (默认为: 4)
+# 视频生成线程数
 VIDEO_THREADS=4
-
-# 最终视频的宽度 (默认为: 750)
-VIDEO_WIDTH=1080
-
-# 最终视频的高度 (默认为: 1280)
-VIDEO_HEIGHT=1920
+# 视频宽度
+VIDEO_WIDTH=750
+# 视频高度
+VIDEO_HEIGHT=1280
 
 # -----------------------------------------------------------------------------
-# 系统与日志 (System & Logging)
+# 其他配置
 # -----------------------------------------------------------------------------
-
-# 是否开启详细日志 (true/false) (默认为: true)
+# 是否开启详细日志
 VERBOSE_LOGGING=true
+</file>
+
+<file path="test_novel.txt">
+欢迎来到西伯利亚
+
+1
+
+鼻骨断了？我一下揪住了蚊子的衣服，说：「我还要打！你想
+办法 ！」
+
+「别打了！西毒，再打下去你真就没命了！」李哥死死的握着
+我的手说：「认输吧，我对裁判说我们认输！」
+
+「别！」我一下揪住了李哥的领子，死死的拉着，「李哥，别
+认输，别，我求你了！」
+
+「你想死啊！」李哥喊了起来。
+
+「别认输！」我狠狠的揪着李哥的领子不松手，扭头对蚊子
+说：「快想办法！」
+
+蚊子愣了一下，又看了一眼不说话的李哥，赶紧给我处理伤
+势。先清除掉血迹，接着用两个加厚棉棒塞进了我的鼻孔里，
+塞的很深，顶在了断裂的鼻骨上。剧痛过后，那种异物探进脑
+袋里的感觉真让我恶心。
+
+「记着，用嘴巴呼吸！」蚊子拍我的脑袋说道。不用他说我也
+知道，我的鼻子已经无法通气了。
+黑市拳手对对手没有任何的同情，那种看到你受了重伤坚持搏
+斗而对你心生敬佩的剧情只能在电影里看到。比赛开始，芯片
+就迅速逼了上来，真是可怕的对手。
+
+也许我的伤让他大意了，在芯片刚进入攻击距离内，我突然起
+腿。
+
+打拳不能死打，有时候一个小小的变数让谁都招架不住。前腿
+侧踹，自从我踏入黑拳界就用的极少的一个腿法，正好蹬在芯
+片的脸上！
+
+前腿侧踹攻击距离长，启动又快，虽说力量一般，但打在头上
+的话也是有点效果的。芯片没有防住，被我踹的一个后仰。他
+双手的防御开始散乱，我抓住机会，朝他的左侧软肋疯狂连
+扫！
+
+我感觉我才是芯片！这机会抓的简直太帅了！我大张着嘴拼命
+喘气，催动全身力量不停扫踢，我知道过了这村就没这店了！
+
+芯片被我突然启动的连续重扫踢的身体晃荡，但他毕竟是极有
+经验的拳手，立刻恢复了防御。我马上放弃了腿攻，转而用快
+速的拳法进行贴身围剿。我能听见场馆内已经爆棚的呼喊声，
+观众们的激情让我血气上涌，不知疲倦的疯狂挥拳！大脑里只
+有一个念头，就是要摧毁对方！
+
+现在想起来，我觉得我真是疯了，在芯片架好防御的情况下，
+我竟然连续挥拳超过两分钟，一直到这个回合结束，我还在拼
+命的击打抱头的芯片，直到裁判把我拉开。
+坐在拳台角落里，我大口喘着气，双手都在发抖，刚才用力过
+度了。芯片坐在那里正在处理伤势，他的脸上也全都是血，不
+知道被打中了哪里。这麻绳很操蛋，使劲的划过去一下就破
+皮。李哥捧着我的脸说：「西毒，你感觉怎么样，没事吧？」
+
+「我很好……」我喘气喘的说话都不利索。
+
+「你眼睛怎么这么红？」
+
+「红吗？」红不红我自己也看不到，不管他了，爱红不红。新
+的回合一开始，我就冲了上去。这下彻底满足场内所有观众的
+欲望了，我跟芯片像两条发疯的斗狗一样厮杀在了一起。
+
+没错，在很多人的眼中，只有这样，才是黑拳。
+
+我已经记不清我挨了多少拳脚，到最后疼痛感已经消失，打在
+身上只是电击一般的麻，鲜血和汗水在我眼前飞溅，我分不清
+是谁的。一记看上去毫不起眼的摆拳过去，芯片身子一晃，倒
+下了。
+
+我接着的一拳打了个空。看着芯片倒在我的脚下，我忽然产生
+了一种错觉，觉得那倒下的人是我自己。我的意识都恍惚了。
+
+裁判蹲下去给芯片读秒。可芯片一直趴着，一动不动。一只手
+在脑袋前面，还握着拳，另一只手无力的摆在一边，拳头已经
+松开了。
+
+在第七回合，裁判宣布我获胜。我站在那里没有动，我真的是
+一动也不想动，我好累。场馆内沸声四起，我听不清他们在喊
+什么。李哥冲上来，紧紧的抱住了我。我就那么歪在他的身
+上，任凭他在我耳边大声大叫：「西毒，你赢了！你赢了，西
+毒！」
+
+西毒……是我吗？
+
+好多人涌上了拳台，我的思维好像静静漫过的海水，把一切泡
+的都不真实。眼前的景象全是模糊的，只有阿果是清楚的。
+
+我忽然间好想她。
+
+离开拳场，李哥带着我直接去了医院。我在离开的时候很后悔
+没有看到姓秦的跟姓陈的这一对拜把子兄弟。不过在医院听李
+哥说，这两家伙愣在那里一动不动，脸上难看的跟吃了屎一
+样。他们把所有的家底全部赔了进去，买回去的飞机票都是个
+困难。
+
+一场拳赛让他们倾家荡产。真是痛快。
+
+去医院做了手术，固定断裂的鼻骨。当那两个棉棒从我鼻子里
+掏出来的时候，真是又疼又爽。事后医生告诉我，全身的伤还
+有很多，不过没有什么致命的。我说你这不是废话吗，我一动
+全身都疼。
+
+医生白了我一眼，说，你的三根肋骨有不同程度的骨裂，注意
+养护。
+
+晚上躺在病床上，跟散架了似的。李哥坐在我旁边，抽着烟问
+我：「西毒，赢了，说说啥感想。」
+「没有感想，就是……累。」我实话实说。
+
+「你现在可是打败了芯片的拳手，回去让小妖他们知道了还不
+得羡慕死.。」李哥笑着说：「以后你跟他们可就不是一个档次
+的了。」
+
+我忽然想到：「李哥，你在我身上下注了吗？」
+
+「说实话，下是下了，还真没敢多下。下了五万，赚回来四十
+万。」李哥笑道：「早知道我就下四十万的注了。」
+
+「呵呵……」我刚想笑，就感觉鼻子生疼。我说：「那就好。李
+哥，回去后，我不想打拳了。」
+
+「嗯，不打就不打吧，想干点啥李哥支持你。阿果比你大，年
+龄也不小了，她也要过过安定的日子了。」
+
+「咱啥时候回去？」听到阿果，我一时间思归心切。
+
+「等你伤养的差不多了再走，反正现在也不急了。」听得出
+来，李哥也是松了一口气。这时候李哥那两个贴身的小弟从外
+面走进来，说：「李哥，芯片也送进这医院里来了。就在最头
+上的那间病房里，我刚才打听了一下，说是颅内震荡，现在还
+昏迷着呢。」
+
+「这家伙……他这次可害了不少人倾家荡产啊。」李哥说着，点
+了一根烟放在我面前。
+
+「李哥，你知道我不会抽烟。」
+「学学嘛，反正你以后又不打拳了。混社会，总得要抽烟的
+嘛。」李哥说。我一想也是，刚接过香烟，病房门开了，进来
+了三个高大的外国白人，在敞开衣服的胸口处，露出了貌似巨
+大蝴蝶的纹身。
+
+「你们是……」李哥一愣，刚想说什么，他们三个立刻掏出了手
+枪对准了我们，为首的一个白人用很流利的汉语说：「李向
+昂，你别乱动。」
+
+2
+
+这是一个单人病房，空间不大，三个拿枪的白人带着一股子杀
+气。一时间，无数念头闪过我脑海，他们干什么？报复？押注
+在芯片身上输钱的人？还是幕后组织老大请来的杀手……我被那
+黑洞洞的枪口指着，只觉得浑身冰冷。
+
+「你们怎么会知道我的名字！你们干什么的！」李哥是见过世
+面的人，在这种情况下也没有慌乱。虽然被枪指着不能动，但
+语气中却透着一股黑道大哥睥睨江湖的气度。
+
+「李向昂，你在天津还能说上几句话，可是在这里，我劝你最
+好闭嘴。」为首的那个白人一晃枪口，又指着李哥手下那两个
+蠢蠢欲动的小弟：「别逼我，我可不想在这里再杀人。」
+
+再杀人？我心里一惊，难道说他们刚才已经杀人了吗？杀谁
+了？
+
+李哥脸色铁青，并未闭嘴，而是沉声说道：「你们是芯片的
+人？难道输了比赛，就用这种下三滥的手段来报复吗！」
+「芯片，哦，不好意思，刚才他已经死了，就死在了这把枪
+下。」这个白人说着，晃了晃手上那把加了消音器的手枪，
+「留着他已经没用了，我们已经有了新的目标。」
+
+「你们到底是谁！」李哥的声音竟然有一些发颤。
+
+「蝴蝶会，李老大想必知道这个名字吧。」
+
+李哥愣了，他说出来的话带着不敢置信的腔调：「蝴蝶会？你
+们是……俄罗斯黑手党！」
+
+「说的没错。」那白人微微一笑。
+
+我被震惊了！简直不敢相信！面前的家伙竟然是闻名世界的黑
+帮团伙——俄罗斯黑手党的人！那个让俄罗斯政府都束手无策
+的组织？我的天，这他妈哪跟哪啊？
+
+「你们……想干什么？」李哥的声音有点发抖，他这次算是见到
+同道中人了，不过不是一个级别的。
+
+「那我就长话短说了。芯片本来是蝴蝶会物色的拳手，准备要
+他代表组织参加下一届黑市拳峰会的，没想到却败在了这个中
+国小子的手上。所以……」白人的蓝色眼睛紧紧的盯着我：「你
+要代替他。」
+
+「你们凭什么要求我代替他，你们没这个权利！」我徒劳地说
+道。
+
+「这个你说了不算。」白人咧嘴笑道：「我们现在就要带你
+走。」
+「我不走！」我强忍着恐惧，猛的发起狠来：「你们杀了我，
+也别想逃出去，这里是中国，可不是你们的地盘！」
+
+白人听了这话并不生气，却微微一笑，说出了一个名字，让我
+的心里猛然一颤！
+
+从他嘴里说出来的，竟然是我父亲的名字！
+
+「不要那么吃惊，在你参加这场比赛之前，关于你的所有资料
+我们都已经掌握了。如果你不配合的话，我们不仅会杀了你，
+还有你的家人，你的朋友，我们一个都不会放过。相信我，我
+们有这个能力。对于没有利用价值的人，我们从来不手软
+的。」
+
+我惊愕的已经说不出话来。怎么会，怎么会这样？我的大脑瞬
+间一片空白，原本以为一切都已经结束，这帮人却突然出现，
+凭空扼杀了我的希望。为什么？为什么会这样！
+
+「我们的时间已经不多了，芯片的尸体随时会被人发现。我给
+你一分钟的时间选择，是跟我们走，还是留在这里，跟你的家
+人一起变成尸体。」白人用枪指着我，口气中丝毫没有商量的
+余地。
+
+我转头去看李哥，他的脸色已经一片死灰。我明白，在这种情
+况下，他已经完全没辙。俄罗斯黑手党的传言我听说过，他们
+是全球势力范围最广的黑帮组织之一。由于俄罗斯的政府裁
+员，许多军方的精英都被俄罗斯黑手党所吸收，成为对抗政府
+法治的中坚力量。他们公开与社会对抗，明目张胆地进行各种
+犯罪活动。凡是威胁他们利益者，一律惨遭报复，许多政商名
+流被暗杀的事件，即出于他们之手。并且俄罗斯黑手党势力遍
+布全球，在美国都有分支机构。李哥的势力跟他们比起来，简
+直犹如蚂蚁之于大象。
+
+如果他们真的针对我家人和朋友的话，后果不堪设想。以他们
+的情报网，肯定连阿果也不会幸免于难。
+
+我明白，事情已经完全没有转机。我平静了下来，问：「我能
+先打一个电话吗？」
+
+「不好意思，不可以。从今天开始，你不能再跟任何人联
+系。」
+
+「你们要带我去哪？」
+
+「俄罗斯。」
+
+「我要多长时间才能回到中国？」
+
+「顺利的话，一年。在你不死的前提下。」
+
+我绝望了，我知道已经回天无力。事态的发展不受任何人的控
+制。我紧紧的抓着李哥的衣服做最后的嘱托：「李哥，不要告
+诉阿果我去了哪里，不要再让她担心。你只要告诉她，一定要
+让她等我，一年后我会回去找她，一定！还有，打电话告诉我
+家人，随便编一个什么理由都可以，千万别让他们为我担心！
+李哥，我拜托你了！」
+
+李哥的嘴唇在轻轻颤抖，他没有说话，握着我的手点了点头。
+我浑身疼痛的站了起来，说：「我跟你们走，不要伤害任何
+人。」
+
+就这样，我离开了这里，跟着他们去了一个陌生的国度。一切
+许下的誓言，都在残酷的现实面前灰飞烟灭。
+
+这帮人确实神通广大，不费吹灰之力就把我带到了俄罗斯。出
+国原来可以这么简单。说实话，他们在路上很照顾我，因为我
+的身体还没有恢复，不大适应长途跋涉。
+
+这些人对我的身份了如指掌，从根上掐断了我中途逃跑的机
+会。他们可能在中国长期活动，所以汉语说的非常流利。我问
+那个为首的白人叫什么名字，他说自己叫尼古拉耶维奇，不过
+这个名字并不好记，大家都叫他黑桃 K。我也可以这样称呼
+他。
+
+我问他，为什么不叫黑桃 A 呢？A 比 K 大。
+
+他皱皱眉：「我的老大叫黑桃 A。」
+
+我们来到了莫斯科。根本就没有时间领略这座充满传奇性的历
+史古城的风采，我就被直接带到了一架小型私人飞架上，我问
+黑桃 K 要去哪里，他告诉我说，去西伯利亚。
+
+西伯利亚，记忆中好遥远的地方。在我的心目中，它跟北冰洋
+是一个概念。听了我的话，黑桃 K 告诉我，西伯利亚的北面就
+是北冰洋。
+
+我顿时感觉到一股寒意。
+坐在有些颠簸的飞机上，我问：「为什么要去西伯利亚？」
+
+「因为在那里有一个训练营，你要在那儿接受训练。」黑桃 K
+简短地回道。
+
+「朱可夫训练营吗？」我接着问道，心想还真有这地方？
+
+「朱可夫？」黑桃 K 愣了一下，「朱可夫是二战时期的苏联元
+帅，跟训练营有什么关系？」
+
+「难道我说错了吗？」我掰着手指头说：「世界五大黑拳训练
+营，有印尼的班加旺训练营、哥伦比亚的黑十字训练营、阿富
+汉的星月训练营、中印边境的康巴训练营和西伯利亚的朱可夫
+训练营。它们培养了世界上最为优秀的黑市拳拳手，并且把这
+些拳手输出向世界各地，通过参加比赛为这些组织赚取巨额奖
+金。难道不是吗？」
+
+「哦，你们中国人的想象力真是太丰富了，这都是谁告诉你
+的？」黑桃 K 颇为无奈的扶着自己的额头：「怎么说的还跟真
+事一样，我从来就没听说过什么朱可夫训练营，我告诉你，你
+说的这些都是假的。」
+
+「我靠……竟然全都是假的？」我暗暗的想，妈的，被地摊文学
+给骗了。
+
+「那我们将要去的训练营叫什么名字？」我不甘心的问。
+
+「没有名字，这个地方本来是我们蝴蝶会的一个秘密分支机
+构，为了准备一年之后的国际黑市拳峰会，才临时改成了训练
+营。」黑桃 K 转头对我说：「你就叫它训练营，就可以了。」
+
+3
+
+飞机在广袤无垠的高原上飞行，下面的景色极为苍凉壮阔。巨
+大的西伯利亚如同一个沉睡的巨人，一眼望不到边际的躺卧在
+大地之上。黑桃 K 指着下面说：「看，那是贝加尔湖。」
+
+我从飞机上向下看去，只间苍茫辽阔的大地之上，有一片清澈
+无瑕的蓝色，好像撒在大地上的一把蓝色珍珠。湖型狭长弯
+曲，宛如一弯新月，黑桃 K 带着自豪的口气说：「贝加尔湖是
+世界上最深最大的淡水湖，被称作西伯利亚的明眸。」
+
+啊，果真漂亮，那就是贝加尔湖吗？那就是中国史书里所记载
+的「北海」，苏武牧羊的地方？我淡淡地道：「我们汉朝的哥
+们苏武，曾经在这里住了 19 年，天天放羊。」
+
+黑桃 K 扭头看了我一眼，接着咧嘴笑了起来：「真不愿意跟中
+国人打交道。」
+
+「为什么？」
+
+「因为中国人跟俄罗斯人一样，心中都有一个大国情节。不管
+在多么艰苦恶劣的条件下，这种大国情节就像印记一样被刻在
+了骨头里，永远无法抹除。」黑桃 K 耸耸肩，「大国对大国，
+当然不愿意打交道了。用你们中国人的话来说，叫一山不容二
+虎。」
+「哦，我想我现在对你没有什么威胁。」我指着自己的鼻子
+说：「我的鼻骨还没有长好呢。」
+
+黑桃 K 只是笑笑，不再说话。他其实笑的时候挺多，并没有我
+想象中的那么残酷。这个杀手不太冷。
+
+其实从广州到莫斯科，再到这里，我中间不止一次的想过逃
+脱。以他们对我的看护程度，不是没有逃脱的可能。但最后，
+我还是放弃了，我不能拿所有人的性命冒险。黑桃 K 绝对没有
+表面上那么温文尔雅，我逃了，我的家人，我的朋友，还有阿
+果，都会有灭顶之灾。
+
+飞机最后降落在普托兰纳，一块隐藏在西伯利亚广阔原始森林
+里的高原。
+
+下了飞机之后，我并没有感觉到寒冷。空气非常清新，阳光照
+射也很充足，身上暖洋洋的。黑桃 K 告诉我，西伯利亚也有夏
+天，只不过非常短暂。这里的冬天十分严寒，有时达到摄氏零
+下四五十度，能够冻炸我的肺。
+
+「说说黑市拳峰会吧。」在前往训练营的路上，我问黑桃 K。
+走了几步路，我的旧伤又疼了起来。
+
+「国际黑市拳峰会三年举办一次，对整个世界的职业黑拳手来
+说都很重要。哪个组织的代表拳手如果在这场峰会上夺得冠
+军，对于这个组织的整个家族来说都是一个巨大的荣誉，同时
+还能带来巨大金额的生意。」黑桃 K 看我走路费劲，还搀扶了
+我一把，「明白吗？这对我们来说很重要。」
+「这么大的赌注，你们全都押在我一个人身上？」
+
+「不，不，你并不是惟一的，你只是其中之一，就像被你打败
+的芯片一样。一年后，你会和训练营里面的其他拳手一起参加
+峰会。」
+
+「如果我得不到冠军呢。」我终于问了这个我最关心的问题：
+「如果我得不到冠军，你们就会杀了我，我再也不会回到中国
+是吧。」
+
+黑桃 K 笑了起来：「西毒先生，我们是黑帮，不是屠夫。请不
+要把我们想的太坏，除非在没有办法的情况下。」
+
+我稍微安心了些，他又接着说道：「冠军只有一个，谁都不知
+道哪一个人会获得冠军头衔。不管你打赢或者打输，只要你最
+后能够活下来，我们都会按照约定把你送回中国。但是……我想
+你一定不愿意输的，在那个拳台上，输跟死，几乎没有区
+别。」
+
+「还有，」黑桃 K 又道：「只要你能入围，最后活下来的话，
+会有 5 万美金的报酬。」
+
+「你能让我打一个国际长途电话吗？」
+
+「不能，我已经说过了，你不能再和任何人联系。」
+
+这座位于普托兰纳高原的训练营看上去就像是一所监狱，那灰
+色的建筑没有一点生气。黑桃 K 告诉我，本来这个地方是没有
+这么大的，这是后来又扩建起来的。他把我送到了训练营另一
+个白人的手中，就没有他事了。临走的时候，黑桃 K 对我说：
+「嘿，中国小子，希望一年之后我还能有机会把你送回中
+国。」
+
+看着黑桃 K 离去，我忽然想起了一句老话，有人的地方，就有
+江湖。
+
+「嘿，你，会说英语吗？」训练营的那个高大健壮的白人用英
+语问我。这人的体格极其强健，脸上的两道皱纹又深又长，好
+像两道刀疤。看样子应该是这里的教官一类的。
+
+「会说一点，说的不好。」我也用英语回答道。
+
+「那没有办法，你以后慢慢适应吧。因为这里没有人会说中国
+话，包括我。」白人尽量说的很慢，以便我能听懂，「我是这
+里的第一教官，耶奇科夫斯基，前陆军上尉。你叫我教官就行
+了。」
+
+「哦，教官，我能先打一个电话吗？」
+
+「不能，这里没有任何通讯设备。」教官冷冷地回道。
+
+他带着我走进训练营。这里很空旷，就像它所在的西伯利亚一
+样毫无生气。我注意到里面还有一些拿着武器的军士，人并不
+多，但也有十几个，他们见了这位叫做「耶奇科夫斯基」的教
+官都立正行礼，而教官却只是略略的点头致意。
+
+教官带着我去见了一个医生。我能认出来他是医生，因为他穿
+着一件白色大褂。好像世界上所有的医生都是这身打扮。医生
+检查了一下我之前的伤势，尤其是我那还没有愈合的鼻骨，转
+头对教官叽里呱啦说了一通话。我一句也听不懂，不过听语速
+和发音，应该是俄语。
+
+教官听了医生的话后点了点头，带着我进了一个房间，对我
+说：「你身上的伤势还不允许参加训练，住在这个房间里，十
+五天之后开始训练。」
+
+「要把我关在这个房间里十五天？」我看了一眼这个不大的地
+方，一张床，一张桌子，上面摆放着一台老式的电脑，还是显
+示器压在歪倒的主机上那种。在房间里还吊着一个沙袋，室内
+有一个小厕所，除此之外别无仅有。
+
+「十五天，你的任务是让自己的身体快速痊愈，我想够了。」
+教官指着门外说，「每天会有人过来给你送饭。还有，不要想
+着从这里跑出去，外面的那些士兵会当场射杀你。」
+</file>
+
+<file path="app/models.py">
+# app/models.py
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Optional
+
+
+@dataclass
+class Shot:
+    """
+    表示一个独立的分镜（或镜头）。
+    这是我们流水线中处理的基本工作单元。
+    """
+
+    # 核心内容
+    shot_id: int
+    chapter_index: int
+    original_text: str
+
+    # 生成的数据 (最终使用的提示词)
+    image_prompt: Optional[str] = None
+
+    # 生成的资产路径
+    storyboard_path: Optional[Path] = None  # 指向分镜脚本JSON文件的路径
+    refined_prompt_path: Optional[Path] = None  # 指向优化后的提示词TXT文件的路径
+    image_path: Optional[Path] = None
+    audio_path: Optional[Path] = None
+    srt_path: Optional[Path] = None
+    video_clip_path: Optional[Path] = None
+
+    # 状态
+    error: Optional[str] = None
+
+    def get_full_id(self) -> str:
+        """返回唯一的镜头ID，格式为 '章节-镜头'"""
+        return f"{self.chapter_index}-{self.shot_id}"
+
+
+@dataclass
+class Chapter:
+    """表示一个完整的章节，包含多个分镜。"""
+
+    index: int
+    content: str
+    shots: list[Shot] = field(default_factory=list)
+</file>
+
+<file path=".gitignore">
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+data
+
+.mp4
+.env
+
+prompt_history
 </file>
 
 <file path="app/stages/content.py">
@@ -610,160 +1201,6 @@ async def get_chapters(
         return await _get_remote_chapters(session, book_id, book_path)
 </file>
 
-<file path="app/models.py">
-# app/models.py
-from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Optional
-
-
-@dataclass
-class Shot:
-    """
-    表示一个独立的分镜（或镜头）。
-    这是我们流水线中处理的基本工作单元。
-    """
-
-    # 核心内容
-    shot_id: int
-    chapter_index: int
-    original_text: str
-
-    # 生成的数据 (最终使用的提示词)
-    image_prompt: Optional[str] = None
-
-    # 生成的资产路径
-    storyboard_path: Optional[Path] = None  # 指向分镜脚本JSON文件的路径
-    refined_prompt_path: Optional[Path] = None  # 指向优化后的提示词TXT文件的路径
-    image_path: Optional[Path] = None
-    audio_path: Optional[Path] = None
-    srt_path: Optional[Path] = None
-    video_clip_path: Optional[Path] = None
-
-    # 状态
-    error: Optional[str] = None
-
-    def get_full_id(self) -> str:
-        """返回唯一的镜头ID，格式为 '章节-镜头'"""
-        return f"{self.chapter_index}-{self.shot_id}"
-
-
-@dataclass
-class Chapter:
-    """表示一个完整的章节，包含多个分镜。"""
-
-    index: int
-    content: str
-    shots: list[Shot] = field(default_factory=list)
-</file>
-
-<file path=".gitignore">
-# Python-generated files
-__pycache__/
-*.py[oc]
-build/
-dist/
-wheels/
-*.egg-info
-
-# Virtual environments
-.venv
-data
-
-.mp4
-.env
-
-prompt_history
-</file>
-
-<file path="app/cache.py">
-# app/cache.py
-import json
-import pickle
-import hashlib
-from pathlib import Path
-from typing import Callable
-from functools import wraps
-
-from .config import settings
-from loguru import logger
-
-
-def _generate_cache_key(func: Callable, *args, **kwargs) -> str:
-    """根据函数和参数生成一个确定性的哈希键"""
-    # 将args和kwargs合并并排序，以确保确定性
-    # 使用json.dumps进行序列化，可以处理大部分内置类型
-    # sort_keys=True保证了字典键的顺序
-    # default=str处理了无法直接序列化为JSON的对象（如Path对象）
-    try:
-        payload = {
-            "args": args,
-            "kwargs": kwargs,
-        }
-        serialized_data = json.dumps(payload, sort_keys=True, default=str).encode(
-            "utf-8"
-        )
-    except TypeError:
-        # 对于更复杂或不可序列化为JSON的对象，使用pickle作为后备方案
-        # 注意：pickle的输出可能因Python版本而异，但对于一个稳定环境是可靠的
-        payload = (args, kwargs)
-        serialized_data = pickle.dumps(payload)
-
-    # 使用SHA256生成哈希值
-    return hashlib.sha256(serialized_data).hexdigest()
-
-
-def cache(cache_path: Path, result_type: str = "text"):
-    """
-    一个通用的缓存装饰器，可缓存函数结果到文件。
-    支持文本、二进制和pickle三种模式。
-
-    :param cache_path: 缓存文件的存储目录 (e.g., settings.paths.cache_llm)
-    :param result_type: 'text', 'binary', 或 'pickle'
-    """
-
-    def decorator(func: Callable) -> Callable:
-        @wraps(func)
-        async def wrapper(*args, **kwargs):
-            cache_key = _generate_cache_key(func, *args, **kwargs)
-            cache_file = cache_path / f"{func.__name__}_{cache_key}"
-
-            # 检查缓存是否存在
-            if cache_file.exists():
-                logger.debug(
-                    f"✅ 缓存命中: {func.__name__} (key: {cache_key[:8]}...), 从 {cache_file} 读取"
-                )
-                if result_type == "binary":
-                    return cache_file.read_bytes()
-                elif result_type == "pickle":
-                    return pickle.loads(cache_file.read_bytes())
-                else:
-                    return cache_file.read_text(encoding="utf-8")
-
-            # 执行函数并获取结果
-            logger.debug(
-                f"❌ 缓存未命中: {func.__name__} (key: {cache_key[:8]}...), 执行函数"
-            )
-            result = await func(*args, **kwargs)
-
-            # 保存结果到缓存
-            if result is not None:
-                cache_path.mkdir(parents=True, exist_ok=True)
-                if result_type == "binary":
-                    cache_file.write_bytes(result)
-                elif result_type == "pickle":
-                    cache_file.write_bytes(pickle.dumps(result))
-                else:
-                    cache_file.write_text(str(result), encoding="utf-8")
-                logger.debug(f"📝 结果已缓存至: {cache_file}")
-
-            return result
-
-        return wrapper
-
-    return decorator
-</file>
-
 <file path="app/ffmpeg_utils.py">
 # app/ffmpeg_utils.py
 import subprocess
@@ -875,6 +1312,231 @@ def get_ffmpeg_gpu_params():
         "threads": os.cpu_count() or 2,
         "ffmpeg_params": [],
     }
+</file>
+
+<file path="app/stages/finalizer.py">
+# app/stages/finalizer.py
+import asyncio
+from datetime import timedelta
+from pathlib import Path
+
+import srt
+# v2.x: Import VideoFileClip from specific module, avoid moviepy.editor  
+from moviepy.video.io.VideoFileClip import VideoFileClip
+
+from ..config import settings
+from loguru import logger
+from ..models import Shot
+
+
+async def _merge_srt_files(sorted_shots: list[Shot], output_srt_path: Path):
+    """异步合并所有SRT文件，并校正时间戳。"""
+    logger.info("🚀 开始合并SRT字幕文件...")
+    final_subtitles = []
+    cumulative_duration = timedelta(seconds=0)
+    subtitle_index = 1
+
+    for shot in sorted_shots:
+        if not shot.video_clip_path or not shot.video_clip_path.exists():
+            continue
+
+        # 获取视频时长
+        try:
+            # 使用 MoviePy 异步获取时长可能复杂，这里暂时用同步IO
+            # 在真实的高性能场景，可考虑用 ffprobe 的异步封装
+            with VideoFileClip(str(shot.video_clip_path)) as clip:
+                duration = timedelta(seconds=clip.duration)
+        except Exception as e:
+            logger.warning(
+                f"无法获取视频时长 {shot.video_clip_path.name}: {e}, 跳过此片段的字幕处理。"
+            )
+            continue
+
+        # 处理SRT文件
+        if (
+            shot.srt_path
+            and shot.srt_path.exists()
+            and shot.srt_path.stat().st_size > 0
+        ):
+            try:
+                content = shot.srt_path.read_text("utf-8")
+                subs = list(srt.parse(content))
+                for sub in subs:
+                    sub.start += cumulative_duration
+                    sub.end += cumulative_duration
+                    sub.index = subtitle_index
+                    final_subtitles.append(sub)
+                    subtitle_index += 1
+                logger.debug(
+                    f"已处理字幕 {shot.srt_path.name}, 添加了 {len(subs)} 条字幕。"
+                )
+            except Exception as e:
+                logger.error(f"处理字幕文件 {shot.srt_path.name} 失败: {e}")
+
+        cumulative_duration += duration
+
+    if final_subtitles:
+        final_srt_content = srt.compose(final_subtitles)
+        output_srt_path.write_text(final_srt_content, encoding="utf-8")
+        logger.info(f"✅ 字幕文件合并成功，保存至: {output_srt_path}")
+    else:
+        logger.info("没有找到可合并的字幕文件。")
+
+
+async def merge_video_clips(book_id: str, shots: list[Shot]):
+    """
+    使用ffmpeg将所有视频片段合并成最终的视频文件。
+    """
+    book_path = settings.paths.get_book_path(book_id)
+    final_video_path = book_path / f"{book_id}.mp4"
+    final_srt_path = book_path / f"{book_id}.srt"
+    concat_list_path = book_path / "concat_list.txt"
+
+    # 确保镜头按章节和ID排序
+    sorted_shots = sorted(shots, key=lambda s: (s.chapter_index, s.shot_id))
+
+    valid_clips = [
+        shot.video_clip_path
+        for shot in sorted_shots
+        if shot.video_clip_path and shot.video_clip_path.exists()
+    ]
+
+    if not valid_clips:
+        logger.error("没有有效的视频片段可供合并。")
+        return
+
+    logger.info(f"准备合并 {len(valid_clips)} 个视频片段...")
+
+    # 创建 ffmpeg 的 concat 文件列表
+    with open(concat_list_path, "w", encoding="utf-8") as f:
+        for clip_path in valid_clips:
+            # ffmpeg concat demuxer 需要对特殊字符进行转义
+            # 但更安全的方式是使用相对路径并在安全的工作目录中运行
+            safe_path = clip_path.resolve().as_posix()
+            f.write(f"file '{safe_path}'\n")
+
+    # 合并字幕
+    await _merge_srt_files(sorted_shots, final_srt_path)
+
+    # 异步执行 ffmpeg 命令
+    command = [
+        "ffmpeg",
+        "-y",  # 覆盖输出文件
+        "-f",
+        "concat",
+        "-safe",
+        "0",
+        "-i",
+        str(concat_list_path),
+        "-c",
+        "copy",  # 直接复制流，速度最快
+        str(final_video_path),
+    ]
+
+    logger.info(f"执行ffmpeg命令: {' '.join(command)}")
+    process = await asyncio.create_subprocess_exec(
+        *command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+    )
+
+    stdout, stderr = await process.communicate()
+
+    if process.returncode == 0:
+        logger.info(f"🎉 最终视频合成成功! 文件保存在: {final_video_path}")
+    else:
+        logger.error(f"ffmpeg 合并失败。返回码: {process.returncode}")
+        logger.error(f"ffmpeg STDOUT:\\n{stdout.decode('utf-8', errors='ignore')}")
+        logger.error(f"ffmpeg STDERR:\\n{stderr.decode('utf-8', errors='ignore')}")
+
+    # 清理临时的 concat 文件
+    concat_list_path.unlink(missing_ok=True)
+</file>
+
+<file path="app/cache.py">
+# app/cache.py
+import json
+import pickle
+import hashlib
+from pathlib import Path
+from typing import Callable
+from functools import wraps
+
+from .config import settings
+from loguru import logger
+
+
+def _generate_cache_key(func: Callable, *args, **kwargs) -> str:
+    """根据函数和参数生成一个确定性的哈希键"""
+    # 将args和kwargs合并并排序，以确保确定性
+    # 使用json.dumps进行序列化，可以处理大部分内置类型
+    # sort_keys=True保证了字典键的顺序
+    # default=str处理了无法直接序列化为JSON的对象（如Path对象）
+    try:
+        payload = {
+            "args": args,
+            "kwargs": kwargs,
+        }
+        serialized_data = json.dumps(payload, sort_keys=True, default=str).encode(
+            "utf-8"
+        )
+    except TypeError:
+        # 对于更复杂或不可序列化为JSON的对象，使用pickle作为后备方案
+        # 注意：pickle的输出可能因Python版本而异，但对于一个稳定环境是可靠的
+        payload = (args, kwargs)
+        serialized_data = pickle.dumps(payload)
+
+    # 使用SHA256生成哈希值
+    return hashlib.sha256(serialized_data).hexdigest()
+
+
+def cache(cache_path: Path, result_type: str = "text"):
+    """
+    一个通用的缓存装饰器，可缓存函数结果到文件。
+    支持文本、二进制和pickle三种模式。
+
+    :param cache_path: 缓存文件的存储目录 (e.g., settings.paths.cache_llm)
+    :param result_type: 'text', 'binary', 或 'pickle'
+    """
+
+    def decorator(func: Callable) -> Callable:
+        @wraps(func)
+        async def wrapper(*args, **kwargs):
+            cache_key = _generate_cache_key(func, *args, **kwargs)
+            cache_file = cache_path / f"{func.__name__}_{cache_key}"
+
+            # 检查缓存是否存在
+            if cache_file.exists():
+                logger.debug(
+                    f"✅ 缓存命中: {func.__name__} (key: {cache_key[:8]}...), 从 {cache_file} 读取"
+                )
+                if result_type == "binary":
+                    return cache_file.read_bytes()
+                elif result_type == "pickle":
+                    return pickle.loads(cache_file.read_bytes())
+                else:
+                    return cache_file.read_text(encoding="utf-8")
+
+            # 执行函数并获取结果
+            logger.debug(
+                f"❌ 缓存未命中: {func.__name__} (key: {cache_key[:8]}...), 执行函数"
+            )
+            result = await func(*args, **kwargs)
+
+            # 保存结果到缓存
+            if result is not None:
+                cache_path.mkdir(parents=True, exist_ok=True)
+                if result_type == "binary":
+                    cache_file.write_bytes(result)
+                elif result_type == "pickle":
+                    cache_file.write_bytes(pickle.dumps(result))
+                else:
+                    cache_file.write_text(str(result), encoding="utf-8")
+                logger.debug(f"📝 结果已缓存至: {cache_file}")
+
+            return result
+
+        return wrapper
+
+    return decorator
 </file>
 
 <file path="app/pipeline.py">
@@ -1008,6 +1670,123 @@ class Pipeline:
         self._cleanup_state_file()
         # 优雅地关闭进程池
         self.process_executor.shutdown()
+</file>
+
+<file path="README.md">
+# TaleStreamAI v1.0 🚀
+
+一个基于现代Python构建的、异步的、流水线驱动的AI小说转视频自动化工具。
+
+[B站演示-6小时成片](https://www.bilibili.com/video/BV1mmQvYEEwb/) | [爱发电支持](https://afdian.com/a/dmzw1918)
+
+---
+
+## ✨ 核心特性
+
+* **现代化架构**: 采用基于 `asyncio` 的异步流水线，将I/O密集型任务（API调用）与CPU密集型任务（视频处理）分离，最大化性能。
+* **高度并发**: 充分利用异步I/O和多进程，同时处理内容获取、分镜生成、资产合成等多个环节。
+* **健壮的缓存**: 内置基于参数哈希的缓存机制，昂贵的API调用（LLM、图像、音频）会被自动缓存，极大加速调试和重复运行。
+* **配置驱动**: 所有关键参数通过 `.env` 文件集中管理，清晰易懂。
+* **模块化设计**: 清晰的四阶段流水线 (`Content` -> `Storyboard` -> `Assets` -> `Finalizer`)，易于维护和扩展。
+
+## 🛠️ 技术栈
+
+* **核心框架**: Python 3.12+, Asyncio
+* **LLM编排**: `openai` SDK (兼容所有OpenAI API格式的服务)
+* **语音合成**: Microsoft Edge TTS (`edge-tts`)
+* **图像生成**: 任何兼容的文生图API (默认为Flux)
+* **视频处理**: `moviepy`, `ffmpeg`
+* **依赖管理**: `uv`
+
+---
+
+## 🚀 快速开始
+
+> 强烈建议使用 Python 3.12 或更高版本。
+
+### 1. 安装 uv (如果尚未安装)
+```shell
+# macOS / Linux
+curl -LsSf https://astral.sh/uv/install.sh | sh
+# Windows
+pip install uv
+```
+
+### 2. 克隆并设置环境
+
+```shell
+git clone https://github.com/t41372/TaleStreamAI.git
+cd TaleStreamAI
+
+# 使用uv一键创建虚拟环境并安装所有依赖
+uv sync
+```
+
+### 3. 配置环境变量
+
+复制 `.env.example` 为 `.env`，并填入你的API密钥等信息。
+
+```bash
+# .env
+COOKIE= # 如果需要爬取起点，请填入Cookie
+STORYBOARD_API_KEY=your_gemini_or_other_llm_api_key
+STORYBOARD_API_URL=https://...
+PROMPT_API_KEY=your_deepseek_or_other_llm_api_key
+PROMPT_API_URL=https://...
+```
+
+### 4. 运行！
+
+程序现在拥有唯一的入口 `run.py`。
+
+```shell
+# --- 处理来自本地文件的的小说 ---
+# 使用 test_novel.txt，书籍ID将自动设为 "test_novel"
+uv run run.py test_novel.txt
+
+# 为本地文件指定一个自定义的书籍ID
+uv run run.py your_novel.txt --book_id "my-epic-story"
+
+# --- 处理来自网络的起点小说 ---
+# 使用起点小说ID
+uv run run.py 1043294775
+
+# --- 仅测试API连接 ---
+uv run run.py --test-connections
+```
+
+所有生成的数据，包括缓存和最终视频，都将保存在 `data/book/{book_id}/` 目录下。
+
+-----
+
+## 🏛️ 架构概览
+
+TaleStreamAI 的核心是一个四阶段的异步流水线 (`app/pipeline.py`)：
+
+1.  **Content Stage (`app/stages/content.py`)**:
+
+      * 负责从网络或本地文件获取原始小说文本。
+      * 将文本分割成章节 (`Chapter` 对象)。
+
+2.  **Storyboard Stage (`app/stages/storyboard.py`)**:
+
+      * 接收 `Chapter` 对象，通过LLM将其内容转化为分镜脚本。
+      * 对每个分镜的描述进行二次LLM调用，优化为高质量的图像生成Prompt。
+      * 输出包含完整视觉指令的 `Shot` 对象列表。
+
+3.  **Assets Stage (`app/stages/assets.py`)**:
+
+      * 接收 `Shot` 对象列表。
+      * **并行处理**:
+          * 使用 `asyncio` 并发调用TTS和图像API，生成音频和图片。
+          * 使用 `ProcessPoolExecutor` 将CPU密集型的视频片段合成任务分发到不同进程，避免阻塞。
+      * 输出被媒体文件路径填充了的 `Shot` 对象。
+
+4.  **Finalizer Stage (`app/stages/finalizer.py`)**:
+
+      * 接收已处理的 `Shot` 对象列表。
+      * 使用 `ffmpeg` 高效地将所有视频片段合并为最终的MP4文件。
+      * 同时合并所有字幕，生成一个与视频匹配的 `.srt` 文件。
 </file>
 
 <file path="run.py">
@@ -1324,143 +2103,6 @@ async def generate_all_assets(
     return list(processed_shots)
 </file>
 
-<file path="app/stages/finalizer.py">
-# app/stages/finalizer.py
-import asyncio
-from datetime import timedelta
-from pathlib import Path
-
-import srt
-# v2.x: Import VideoFileClip from specific module, avoid moviepy.editor  
-from moviepy.video.io.VideoFileClip import VideoFileClip
-
-from ..config import settings
-from loguru import logger
-from ..models import Shot
-
-
-async def _merge_srt_files(sorted_shots: list[Shot], output_srt_path: Path):
-    """异步合并所有SRT文件，并校正时间戳。"""
-    logger.info("🚀 开始合并SRT字幕文件...")
-    final_subtitles = []
-    cumulative_duration = timedelta(seconds=0)
-    subtitle_index = 1
-
-    for shot in sorted_shots:
-        if not shot.video_clip_path or not shot.video_clip_path.exists():
-            continue
-
-        # 获取视频时长
-        try:
-            # 使用 MoviePy 异步获取时长可能复杂，这里暂时用同步IO
-            # 在真实的高性能场景，可考虑用 ffprobe 的异步封装
-            with VideoFileClip(str(shot.video_clip_path)) as clip:
-                duration = timedelta(seconds=clip.duration)
-        except Exception as e:
-            logger.warning(
-                f"无法获取视频时长 {shot.video_clip_path.name}: {e}, 跳过此片段的字幕处理。"
-            )
-            continue
-
-        # 处理SRT文件
-        if (
-            shot.srt_path
-            and shot.srt_path.exists()
-            and shot.srt_path.stat().st_size > 0
-        ):
-            try:
-                content = shot.srt_path.read_text("utf-8")
-                subs = list(srt.parse(content))
-                for sub in subs:
-                    sub.start += cumulative_duration
-                    sub.end += cumulative_duration
-                    sub.index = subtitle_index
-                    final_subtitles.append(sub)
-                    subtitle_index += 1
-                logger.debug(
-                    f"已处理字幕 {shot.srt_path.name}, 添加了 {len(subs)} 条字幕。"
-                )
-            except Exception as e:
-                logger.error(f"处理字幕文件 {shot.srt_path.name} 失败: {e}")
-
-        cumulative_duration += duration
-
-    if final_subtitles:
-        final_srt_content = srt.compose(final_subtitles)
-        output_srt_path.write_text(final_srt_content, encoding="utf-8")
-        logger.info(f"✅ 字幕文件合并成功，保存至: {output_srt_path}")
-    else:
-        logger.info("没有找到可合并的字幕文件。")
-
-
-async def merge_video_clips(book_id: str, shots: list[Shot]):
-    """
-    使用ffmpeg将所有视频片段合并成最终的视频文件。
-    """
-    book_path = settings.paths.get_book_path(book_id)
-    final_video_path = book_path / f"{book_id}.mp4"
-    final_srt_path = book_path / f"{book_id}.srt"
-    concat_list_path = book_path / "concat_list.txt"
-
-    # 确保镜头按章节和ID排序
-    sorted_shots = sorted(shots, key=lambda s: (s.chapter_index, s.shot_id))
-
-    valid_clips = [
-        shot.video_clip_path
-        for shot in sorted_shots
-        if shot.video_clip_path and shot.video_clip_path.exists()
-    ]
-
-    if not valid_clips:
-        logger.error("没有有效的视频片段可供合并。")
-        return
-
-    logger.info(f"准备合并 {len(valid_clips)} 个视频片段...")
-
-    # 创建 ffmpeg 的 concat 文件列表
-    with open(concat_list_path, "w", encoding="utf-8") as f:
-        for clip_path in valid_clips:
-            # ffmpeg concat demuxer 需要对特殊字符进行转义
-            # 但更安全的方式是使用相对路径并在安全的工作目录中运行
-            safe_path = clip_path.resolve().as_posix()
-            f.write(f"file '{safe_path}'\n")
-
-    # 合并字幕
-    await _merge_srt_files(sorted_shots, final_srt_path)
-
-    # 异步执行 ffmpeg 命令
-    command = [
-        "ffmpeg",
-        "-y",  # 覆盖输出文件
-        "-f",
-        "concat",
-        "-safe",
-        "0",
-        "-i",
-        str(concat_list_path),
-        "-c",
-        "copy",  # 直接复制流，速度最快
-        str(final_video_path),
-    ]
-
-    logger.info(f"执行ffmpeg命令: {' '.join(command)}")
-    process = await asyncio.create_subprocess_exec(
-        *command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
-    )
-
-    stdout, stderr = await process.communicate()
-
-    if process.returncode == 0:
-        logger.info(f"🎉 最终视频合成成功! 文件保存在: {final_video_path}")
-    else:
-        logger.error(f"ffmpeg 合并失败。返回码: {process.returncode}")
-        logger.error(f"ffmpeg STDOUT:\\n{stdout.decode('utf-8', errors='ignore')}")
-        logger.error(f"ffmpeg STDERR:\\n{stderr.decode('utf-8', errors='ignore')}")
-
-    # 清理临时的 concat 文件
-    concat_list_path.unlink(missing_ok=True)
-</file>
-
 <file path="app/stages/storyboard.py">
 # app/stages/storyboard.py
 import re
@@ -1469,7 +2111,7 @@ import asyncio
 from typing import Coroutine, Any
 from pathlib import Path
 
-import tiktoken
+from chonkie import SentenceChunker
 from ..config import settings
 from ..llm_client import storyboard_client, prompt_client
 from loguru import logger
@@ -1516,46 +2158,26 @@ masterpiece, best quality, highres, anime style, detailed illustration, vibrant 
 """
 
 
-def _split_content_by_tokens(
-    content: str, max_tokens: int, tokenzer_model_name: str = "gpt-4o"
-) -> list[str]:
-    """按token数量将文本分割成块。"""
-    logger.debug(f"Splitting content by tokens, max_tokens={max_tokens}")
-    try:
-        encoding = tiktoken.encoding_for_model(tokenzer_model_name)
-    except KeyError:
-        logger.warning(f"Model '{tokenzer_model_name}' not found for tiktoken, using 'cl100k_base'.")
-        encoding = tiktoken.get_encoding("cl100k_base")
-
-    paragraphs = content.split("\n")
-    chunks, current_chunk_paragraphs, current_chunk_tokens = [], [], 0
-
-    for p in paragraphs:
-        if not p.strip():
-            continue
-        p_tokens = len(encoding.encode(p))
-
-        if p_tokens > max_tokens:
-            logger.warning(
-                f"Paragraph with {p_tokens} tokens exceeds max_tokens {max_tokens}, force splitting."
-            )
-            encoded_p = encoding.encode(p)
-            for i in range(0, len(encoded_p), max_tokens):
-                chunks.append(encoding.decode(encoded_p[i : i + max_tokens]))
-            continue
-
-        if current_chunk_tokens + p_tokens > max_tokens:
-            chunks.append("\n".join(current_chunk_paragraphs))
-            current_chunk_paragraphs = [p]
-            current_chunk_tokens = p_tokens
-        else:
-            current_chunk_paragraphs.append(p)
-            current_chunk_tokens += p_tokens
-
-    if current_chunk_paragraphs:
-        chunks.append("\n".join(current_chunk_paragraphs))
-
-    logger.info(f"Content split into {len(chunks)} chunks.")
+def _create_semantic_chunks(content: str, max_tokens: int, model_name: str = "gpt-4o") -> list[str]:
+    """使用 chonkie.SentenceChunker 将文本分割成语义完整的块。"""
+    logger.debug(f"Creating semantic chunks, max_tokens={max_tokens}")
+    
+    # 将模型名称映射到 tiktoken 编码器名称
+    tokenizer_name = "cl100k_base"  # 适用于 gpt-4, gpt-4o, gpt-3.5-turbo 等
+    if "gpt-3.5" in model_name.lower():
+        tokenizer_name = "cl100k_base"
+    elif "gpt-4" in model_name.lower():
+        tokenizer_name = "cl100k_base"
+    
+    chunker = SentenceChunker(
+        tokenizer_or_token_counter=tokenizer_name,
+        chunk_size=max_tokens,
+        chunk_overlap=min(100, max_tokens // 4),  # 确保重叠不超过块大小的1/4
+        min_sentences_per_chunk=1
+    )
+    chunk_objects = chunker(content)
+    chunks = [chunk.text for chunk in chunk_objects]
+    logger.info(f"内容被分割为 {len(chunks)} 个语义块。")
     return chunks
 
 
@@ -1577,7 +2199,7 @@ async def _refine_shot_prompt(shot: Shot, book_path: Path) -> Shot:
     
     # 2. 调用新的 LLM 客户端方法
     refined_prompt = await prompt_client.chat_completion(
-        messages, system=PROMPT_REFINE_SYSTEM_PROMPT, output_path=refined_prompt_asset_path
+        messages, system=PROMPT_REFINE_SYSTEM_PROMPT, output_path=refined_prompt_asset_path, expect_json=False
     )
 
     if "ERROR" in refined_prompt:
@@ -1595,98 +2217,84 @@ async def _refine_shot_prompt(shot: Shot, book_path: Path) -> Shot:
 
 async def _process_single_chunk(
     chunk: str, chapter_index: int, chunk_index: int, num_chunks: int, book_path: Path
-) -> list[Shot] | None:  # 修改返回类型提示
-    """处理单个文本块，生成原始Shots列表，并增加重试逻辑。"""
+) -> list[Shot] | None:
+    """处理单个文本块，生成原始Shots列表。所有复杂性都已移至LLM客户端。"""
     logger.info(
         f"Processing chunk {chunk_index + 1}/{num_chunks} for chapter {chapter_index}..."
     )
     messages = [{"role": "user", "content": chunk}]
     
-    # 1. 构造资产路径
     storyboard_asset_path = book_path / "llm" / f"storyboard_ch{chapter_index}_chunk{chunk_index}.json"
 
-    # 增加重试机制
-    max_retries = 3
-    for attempt in range(max_retries):
-        logger.debug(f"Attempt {attempt + 1}/{max_retries} for chunk {chapter_index}-{chunk_index}")
+    # 客户端现在负责缓存、重试和修复。我们只需一次调用。
+    response_str = await storyboard_client.chat_completion(
+        messages, system=STORYBOARD_SYSTEM_PROMPT, output_path=storyboard_asset_path, expect_json=True
+    )
 
-        # 2. 调用新的 LLM 客户端方法
-        response_json_str = await storyboard_client.chat_completion(
-            messages, system=STORYBOARD_SYSTEM_PROMPT, output_path=storyboard_asset_path
+    if "ERROR" in response_str:
+        logger.error(
+            f"Storyboard generation failed for chunk {chunk_index + 1} of chapter {chapter_index} after all retries and repairs: {response_str}"
         )
+        # 返回 None 表示此块彻底失败
+        return None
 
-        if "ERROR" in response_json_str:
-            logger.error(
-                f"Storyboard generation API call failed for chunk {chunk_index + 1} of chapter {chapter_index}: {response_json_str}"
+    try:
+        # 此时的 response_str 应该是一个有效的 JSON 字符串
+        storyboard_data = json.loads(response_str)
+
+        # (处理嵌套列表的逻辑可以保留，作为最后一道防线)
+        if not isinstance(storyboard_data, list):
+             if isinstance(storyboard_data, dict):
+                 found_list = False
+                 for key, value in storyboard_data.items():
+                     if isinstance(value, list):
+                         storyboard_data = value
+                         found_list = True
+                         logger.warning(
+                             f"LLM returned a dictionary, but a list was found and extracted from key '{key}'."
+                         )
+                         break
+                 if not found_list:
+                     raise json.JSONDecodeError(
+                         "Response is not a list and no list found in dictionary values",
+                         response_str,
+                         0,
+                     )
+             else:
+                 raise json.JSONDecodeError(
+                     "Response is not a list", response_str, 0
+                 )
+
+        proto_shots = []
+        for item in storyboard_data:
+            shot = Shot(
+                shot_id=-1,
+                chapter_index=chapter_index,
+                original_text=item.get("text", ""),
+                storyboard_path=storyboard_asset_path,
             )
-            await asyncio.sleep(2)  # Wait before retrying
-            continue  # Go to next attempt
+            shot.temp_lens_language_en = item.get("lensLanguage_en", "")
+            proto_shots.append(shot)
+        
+        return proto_shots
 
-        try:
-            # llm_client现在会返回一个清理过的JSON字符串，无需额外清理
-            storyboard_data = json.loads(response_json_str)
-            
-            # 处理嵌套列表的现有逻辑
-            if not isinstance(storyboard_data, list):
-                if isinstance(storyboard_data, dict):
-                    found_list = False
-                    for key, value in storyboard_data.items():
-                        if isinstance(value, list):
-                            storyboard_data = value
-                            found_list = True
-                            logger.warning(
-                                f"LLM returned a dictionary, but a list was found and extracted from key '{key}'."
-                            )
-                            break
-                    if not found_list:
-                        raise json.JSONDecodeError(
-                            "Response is not a list and no list found in dictionary values",
-                            response_json_str,
-                            0,
-                        )
-                else:
-                    raise json.JSONDecodeError(
-                        "Response is not a list", response_json_str, 0
-                    )
-
-            # 在成功解析后
-            proto_shots = []
-            for item in storyboard_data:
-                shot = Shot(
-                    shot_id=-1,  # Temporary ID, will be re-numbered later
-                    chapter_index=chapter_index,
-                    original_text=item.get("text", ""),
-                    storyboard_path=storyboard_asset_path,
-                )
-                shot.temp_lens_language_en = item.get("lensLanguage_en", "")
-                proto_shots.append(shot)
-            
-            return proto_shots  # Success, exit the retry loop and return the result
-
-        except json.JSONDecodeError as e:
-            logger.error(
-                f"[Attempt {attempt + 1}] JSON parsing failed for chunk {chunk_index + 1}: {e}"
-            )
-            logger.debug(f"Problematic JSON string: {response_json_str[:500]}...")
-            
-            # 删除损坏的缓存文件，以便下次重试时能重新调用API
-            storyboard_asset_path.unlink(missing_ok=True)
-            logger.warning(f"Deleted corrupted asset file: {storyboard_asset_path}")
-            
-            if attempt < max_retries - 1:
-                await asyncio.sleep(2 * (attempt + 1))  # Exponential backoff
-
-    # 所有重试失败后，返回None而不是空列表
-    logger.error(f"All {max_retries} retries failed for chunk {chunk_index + 1}. Skipping.")
-    return None  # 修改点：返回None表示失败
+    except json.JSONDecodeError as e:
+        # 这理论上不应该发生，因为客户端应该已经修复了它。
+        # 但作为防御性编程，我们记录这个意外情况。
+        logger.critical(
+            f"FATAL: LLM client returned a non-JSON string that it claimed was valid. This should not happen. Content: {response_str[:200]}... Error: {e}"
+        )
+        # 将其视为彻底失败
+        return None
 
 
 async def _process_chapter_content(chapter: Chapter, book_path: Path) -> list[Shot]:
     """处理单个章节的完整内容，并发生成所有Shots并优化提示词。"""
     storyboard_config = settings.storyboard_llm
-    content_chunks = _split_content_by_tokens(
+    content_chunks = _create_semantic_chunks(
         chapter.content,
         max_tokens=storyboard_config.max_tokens,
+        model_name=storyboard_config.model,
     )
 
     # Step 1: Concurrently create storyboards for all chunks (Scatter)
@@ -1853,6 +2461,17 @@ class Settings:
             max_tokens=_get_int_env("PROMPT_MAX_TOKENS", 8000),
         )
     )
+    # +++ 新增 JSON 修复器 LLM 配置 +++
+    json_repair_llm: LLMConfig = field(
+        default_factory=lambda: LLMConfig(
+            # 默认情况下，可以复用storyboard的配置，但最好用独立的环境变量
+            api_key=_get_str_env("JSON_REPAIR_API_KEY", _get_str_env("STORYBOARD_API_KEY", "")),
+            base_url=_get_str_env("JSON_REPAIR_API_URL", _get_str_env("STORYBOARD_API_URL", "")),
+            model=_get_str_env("JSON_REPAIR_MODEL", "gemini-1.5-flash-latest"),
+            max_tokens=_get_int_env("JSON_REPAIR_MAX_TOKENS", 2048), # 修复任务通常不需要很长的上下文
+        )
+    )
+    # +++ 结束新增部分 +++
 
     # 图像生成配置
     image_width: int = _get_int_env("IMAGE_WIDTH", 1024)
@@ -1892,127 +2511,10 @@ class Settings:
 settings = Settings()
 </file>
 
-<file path="README.md">
-# TaleStreamAI v1.0 🚀
-
-一个基于现代Python构建的、异步的、流水线驱动的AI小说转视频自动化工具。
-
-[B站演示-6小时成片](https://www.bilibili.com/video/BV1mmQvYEEwb/) | [爱发电支持](https://afdian.com/a/dmzw1918)
-
----
-
-## ✨ 核心特性
-
-* **现代化架构**: 采用基于 `asyncio` 的异步流水线，将I/O密集型任务（API调用）与CPU密集型任务（视频处理）分离，最大化性能。
-* **高度并发**: 充分利用异步I/O和多进程，同时处理内容获取、分镜生成、资产合成等多个环节。
-* **健壮的缓存**: 内置基于参数哈希的缓存机制，昂贵的API调用（LLM、图像、音频）会被自动缓存，极大加速调试和重复运行。
-* **配置驱动**: 所有关键参数通过 `.env` 文件集中管理，清晰易懂。
-* **模块化设计**: 清晰的四阶段流水线 (`Content` -> `Storyboard` -> `Assets` -> `Finalizer`)，易于维护和扩展。
-
-## 🛠️ 技术栈
-
-* **核心框架**: Python 3.12+, Asyncio
-* **LLM编排**: `openai` SDK (兼容所有OpenAI API格式的服务)
-* **语音合成**: Microsoft Edge TTS (`edge-tts`)
-* **图像生成**: 任何兼容的文生图API (默认为Flux)
-* **视频处理**: `moviepy`, `ffmpeg`
-* **依赖管理**: `uv`
-
----
-
-## 🚀 快速开始
-
-> 强烈建议使用 Python 3.12 或更高版本。
-
-### 1. 安装 uv (如果尚未安装)
-```shell
-# macOS / Linux
-curl -LsSf https://astral.sh/uv/install.sh | sh
-# Windows
-pip install uv
-```
-
-### 2. 克隆并设置环境
-
-```shell
-git clone https://github.com/t41372/TaleStreamAI.git
-cd TaleStreamAI
-
-# 使用uv一键创建虚拟环境并安装所有依赖
-uv sync
-```
-
-### 3. 配置环境变量
-
-复制 `.env.example` 为 `.env`，并填入你的API密钥等信息。
-
-```bash
-# .env
-COOKIE= # 如果需要爬取起点，请填入Cookie
-STORYBOARD_API_KEY=your_gemini_or_other_llm_api_key
-STORYBOARD_API_URL=https://...
-PROMPT_API_KEY=your_deepseek_or_other_llm_api_key
-PROMPT_API_URL=https://...
-```
-
-### 4. 运行！
-
-程序现在拥有唯一的入口 `run.py`。
-
-```shell
-# --- 处理来自本地文件的的小说 ---
-# 使用 test_novel.txt，书籍ID将自动设为 "test_novel"
-uv run run.py test_novel.txt
-
-# 为本地文件指定一个自定义的书籍ID
-uv run run.py your_novel.txt --book_id "my-epic-story"
-
-# --- 处理来自网络的起点小说 ---
-# 使用起点小说ID
-uv run run.py 1043294775
-
-# --- 仅测试API连接 ---
-uv run run.py --test-connections
-```
-
-所有生成的数据，包括缓存和最终视频，都将保存在 `data/book/{book_id}/` 目录下。
-
------
-
-## 🏛️ 架构概览
-
-TaleStreamAI 的核心是一个四阶段的异步流水线 (`app/pipeline.py`)：
-
-1.  **Content Stage (`app/stages/content.py`)**:
-
-      * 负责从网络或本地文件获取原始小说文本。
-      * 将文本分割成章节 (`Chapter` 对象)。
-
-2.  **Storyboard Stage (`app/stages/storyboard.py`)**:
-
-      * 接收 `Chapter` 对象，通过LLM将其内容转化为分镜脚本。
-      * 对每个分镜的描述进行二次LLM调用，优化为高质量的图像生成Prompt。
-      * 输出包含完整视觉指令的 `Shot` 对象列表。
-
-3.  **Assets Stage (`app/stages/assets.py`)**:
-
-      * 接收 `Shot` 对象列表。
-      * **并行处理**:
-          * 使用 `asyncio` 并发调用TTS和图像API，生成音频和图片。
-          * 使用 `ProcessPoolExecutor` 将CPU密集型的视频片段合成任务分发到不同进程，避免阻塞。
-      * 输出被媒体文件路径填充了的 `Shot` 对象。
-
-4.  **Finalizer Stage (`app/stages/finalizer.py`)**:
-
-      * 接收已处理的 `Shot` 对象列表。
-      * 使用 `ffmpeg` 高效地将所有视频片段合并为最终的MP4文件。
-      * 同时合并所有字幕，生成一个与视频匹配的 `.srt` 文件。
-</file>
-
 <file path="app/llm_client.py">
 """
 統一的大模型客戶端管理模塊
-支持OpenAI兼容的API接口，包含异步并发支持
+支持OpenAI兼容的API接口，包含异步并发、自动重试和JSON修复机制
 """
 
 import sys
@@ -2020,7 +2522,7 @@ import asyncio
 import json
 import random
 import re
-from typing import AsyncIterator, Any, Optional
+from typing import AsyncIterator, Any, Optional, Union
 from pathlib import Path
 
 import tiktoken
@@ -2033,13 +2535,59 @@ from openai import (
     AsyncStream,
 )
 from openai.types.chat import ChatCompletionChunk, ChatCompletionMessageParam
+from json_repair import repair_json
 
 from .config import LLMConfig, settings
 from loguru import logger
 
-
 EMOJI_LIST = ["🚀", "💡", "✨", "🤖", "🧠", "✍️", "🎨", "🎬", "🎶", "💬"]
 
+# +++ 新增 JSON 修复器 Prompt +++
+JSON_REPAIR_SYSTEM_PROMPT = """
+你是一个专家级的 JSON 语法检查和自动修复工具。你的唯一功能是接收一段意图成为 JSON 对象的文本，识别并纠正其中所有的语法错误，然后输出一个格式完美的、可被程序直接解析的、有效的 JSON 对象。
+
+在处理实际输入之前，请先学习以下几个范例，理解你的工作模式：
+
+--- 范例 1 ---
+输入:
+{ 'name': 'John Doe', 'age': 30, }
+
+输出:
+{"name": "John Doe", "age": 30}
+--- 范例 2 ---
+输入:
+{
+// 用户信息
+"username": "testuser"
+"is_active": true
+}
+
+输出:
+{"username": "testuser", "is_active": true}
+--- 范例 3 ---
+输入:
+[
+{
+    "item": "Book",
+    'price': 19.99
+},
+{
+    "item": "Pen",
+    "price": 1.50
+}
+
+输出:
+[{"item": "Book", "price": 19.99}, {"item": "Pen", "price": 1.50}]
+--- 范例结束 ---
+
+现在，请严格遵守以下输出规则来处理真实的输入：
+1.  分析输入内容，查找所有常见的 JSON 错误，包括但不限于：缺失或多余的逗号、不正确的引号（例如单引号应替换为双引号）、未闭合的括号或花括号、非法的注释等。
+2.  纠正所有识别出的错误。
+3.  你最终的输出【必须】是且【仅是】修正后、有效的 JSON 对象的原始文本。
+4.  【绝对不要】在你的回复中包含任何解释、注释、道歉或任何介绍性文字。
+5.  【绝对不要】将你的输出用 Markdown 代码块（```json ... ``` 或 ``` ... ```）包裹起来。
+6.  输出的 JSON 对象前后不能有任何空格、换行符或其他任何字符。
+"""
 
 class UnifiedLLMClient:
     def __init__(self, config: LLMConfig):
@@ -2049,43 +2597,156 @@ class UnifiedLLMClient:
             base_url=config.base_url,
             timeout=config.timeout,
         )
+        # 信号量现在从独立的LLM配置中获取，而不是全局settings
         self.semaphore = asyncio.Semaphore(settings.max_llm_threads)
 
+    async def _repair_json(self, corrupt_json_str: str, original_asset_path: Optional[Path] = None) -> str:
+        """使用专用的LLM尝试修复损坏的JSON字符串，并缓存修复结果"""
+        logger.warning("JSON parsing failed. Attempting to repair with an LLM...")
+        repair_messages = [{"role": "user", "content": corrupt_json_str}]
+        
+        # 基于原始路径派生一个修复缓存路径
+        repair_asset_path = None
+        if original_asset_path:
+            repair_asset_path = original_asset_path.with_name(f"_repaired_{original_asset_path.name}")
+        
+        # 使用全局的 json_repair_client 实例，并传递缓存路径
+        repaired_str = await json_repair_client.chat_completion(
+            repair_messages, system=JSON_REPAIR_SYSTEM_PROMPT, output_path=repair_asset_path
+        )
+        
+        # chat_completion现在也返回错误字符串，所以我们可以直接检查
+        if "ERROR" in repaired_str:
+             logger.error(f"JSON repair failed: {repaired_str}")
+             return f"ERROR: JSON repair also failed. Original error: {corrupt_json_str}"
+
+        logger.info("✅ JSON successfully repaired!")
+        return repaired_str
+
     async def chat_completion(
-        self, messages: list[dict[str, Any]], system: str = "", output_path: Optional[Path] = None
+        self,
+        messages: list[dict[str, Any]],
+        system: str = "",
+        output_path: Optional[Path] = None,
+        expect_json: bool = False
     ) -> str:
         """
-        执行非流式聊天补全。
+        执行非流式聊天补全，内置缓存和重试逻辑。
+        通过 `expect_json` 参数控制是否执行JSON解析和修复。
         如果提供了 output_path，它将作为项目资产进行缓存/读取。
-        否则，它将是一个纯粹的API调用。
         """
-        # 如果提供了路径，则启用资产化缓存逻辑
-        if output_path:
-            if output_path.exists():
-                logger.debug(f"✅ LLM 资产命中: 从 {output_path} 读取")
-                return output_path.read_text("utf-8")
-            
-            logger.debug(f"❌ LLM 资产未命中: 为 {output_path} 执行API调用")
-
-        full_response = ""
-        async for chunk in self._stream_implementation(messages, system):
-            full_response += chunk
+        if output_path and output_path.exists():
+            logger.debug(f"✅ LLM 资产命中: 从 {output_path} 读取")
+            return output_path.read_text("utf-8")
         
-        # 在保存和返回之前，清理LLM可能添加的Markdown代码块
-        if "ERROR" not in full_response:
-            # 使用正则表达式移除 ```json 和 ```
-            cleaned_response = re.sub(r"```json\s*|\s*```", "", full_response).strip()
+        # 检查是否有损坏的旧文件（仅在期望JSON时）
+        corrupt_path = output_path.with_name(f"_corrupt_{output_path.name}") if output_path and expect_json else None
+        if corrupt_path and corrupt_path.exists():
+             logger.warning(f"发现之前损坏的资产文件: {corrupt_path}. 将直接尝试修复它。")
+             full_response = await self._repair_json(corrupt_path.read_text("utf-8"), output_path)
+             if "ERROR" in full_response:
+                 return full_response # 修复失败，直接返回错误
+             # 修复成功，继续下面的保存逻辑
         else:
-            # 如果是错误信息，则不进行清理
-            cleaned_response = full_response
+            logger.debug(f"❌ LLM 资产未命中: 为 {output_path or 'ad-hoc call'} 执行API调用")
+            full_response = ""
+            async with self.semaphore:
+                # 将重试逻辑移至此处
+                for attempt in range(self.config.retry_attempts):
+                    try:
+                        stream_content = self._stream_implementation(messages, system)
+                        response_chunks = [chunk async for chunk in stream_content]
+                        
+                        # 检查流实现是否返回了错误
+                        if response_chunks and "ERROR" in response_chunks[0]:
+                            full_response = "".join(response_chunks)
+                            raise APIError(message=full_response, request=None, body=None)
 
-        # 如果提供了路径且API调用成功，则保存清理后的结果
-        if output_path and "ERROR" not in cleaned_response:
+                        full_response = "".join(response_chunks)
+                        
+                        if expect_json:
+                            # --- 这是 JSON 处理路径 ---
+                            # 清理LLM可能添加的Markdown代码块
+                            full_response = re.sub(r"```json\s*|\s*```", "", full_response).strip()
+                            
+                            # 尝试解析JSON以验证其完整性
+                            json.loads(full_response)
+                            
+                            logger.debug(f"API调用成功并在第 {attempt + 1} 次尝试时获得有效JSON。")
+                            break # 成功，跳出重试循环
+                        else:
+                            # --- 这是纯文本处理路径 ---
+                            logger.debug(f"API调用成功并在第 {attempt + 1} 次尝试时获得纯文本。")
+                            break # 成功，跳出重试循环
+
+                    except (APIError, APIConnectionError, RateLimitError, RemoteProtocolError) as e:
+                        logger.warning(f"API Error on attempt {attempt + 1}/{self.config.retry_attempts}: {e}")
+                        if attempt < self.config.retry_attempts - 1:
+                            wait_time = 2 ** attempt
+                            logger.info(f"Retrying in {wait_time}s...")
+                            await asyncio.sleep(wait_time)
+                        else:
+                            full_response = f"ERROR: API call failed after {self.config.retry_attempts} attempts. Last error: {e}"
+                    
+                    except json.JSONDecodeError as e:
+                        # 这个异常只会在 expect_json=True 时被触发
+                        logger.warning(f"JSON解析失败 on attempt {attempt + 1}. Error: {e}. 内容: {full_response[:200]}...")
+                        original_corrupt_response = full_response
+
+                        # 阶段1: 尝试使用轻量级本地库修复
+                        try:
+                            logger.info("尝试使用 json-repair 本地库修复...")
+                            repaired_str = repair_json(original_corrupt_response)
+                            
+                            # 检查修复是否成功：repair_json 失败时返回空字符串或原始字符串
+                            if repaired_str and repaired_str != original_corrupt_response:
+                                json.loads(repaired_str)  # 再次验证
+                                logger.info("✅ 本地库 json-repair 修复成功！")
+                                full_response = repaired_str
+                                break  # 修复成功，跳出重试循环
+                            else:
+                                raise json.JSONDecodeError("repair_json returned empty or unchanged string", repaired_str, 0)
+                                
+                        except json.JSONDecodeError as repair_err:
+                            logger.warning(f"本地库 json-repair 修复失败: {repair_err}")
+                            # 本地库修复失败，进入下一阶段
+                            if attempt < self.config.retry_attempts - 1:
+                                logger.warning("将重试API调用以获取有效的JSON...")
+                                await asyncio.sleep(2)
+                                # continue at the end of the block
+                            else:
+                                # 阶段2: 回退到LLM修复
+                                logger.error("所有API重试均失败，回退到LLM进行修复。")
+                                repaired_response = await self._repair_json(original_corrupt_response, output_path)
+                                full_response = repaired_response  # 无论修复成功与否，都用修复结果覆盖
+
+                # for loop结束后，检查最终结果
+                # 只有在期望JSON且最终失败时，才写入_corrupt_文件
+                if expect_json and "ERROR" in full_response and output_path:
+                    corrupt_path = output_path.with_name(f"_corrupt_{output_path.name}")
+                    logger.error(f"所有尝试和修复均失败。将原始错误响应保存到 {corrupt_path}")
+                    
+                    # 如果我们有原始的损坏响应，就保存它；否则保存最终的错误信息
+                    content_to_save = original_corrupt_response if 'original_corrupt_response' in locals() else full_response
+                    corrupt_path.write_text(content_to_save, "utf-8")
+                    return full_response # 返回最终的错误信息
+
+        # 保存成功的结果
+        if output_path and "ERROR" not in full_response:
             output_path.parent.mkdir(parents=True, exist_ok=True)
-            output_path.write_text(cleaned_response, "utf-8")
-            logger.debug(f"📝 LLM 资产已保存至: {output_path}")
+            output_path.write_text(full_response, "utf-8")
+            
+            if expect_json:
+                logger.debug(f"📝 LLM JSON资产已保存至: {output_path}")
+                # 如果存在，删除旧的损坏文件
+                corrupt_path = output_path.with_name(f"_corrupt_{output_path.name}")
+                if corrupt_path.exists():
+                    corrupt_path.unlink()
+                    logger.info(f"已删除旧的损坏文件: {corrupt_path}")
+            else:
+                logger.debug(f"📝 LLM 纯文本资产已保存至: {output_path}")
 
-        return cleaned_response
+        return full_response
 
     async def chat_completion_stream(
         self, messages: list[dict[str, Any]], system: str = ""
@@ -2101,102 +2762,86 @@ class UnifiedLLMClient:
     async def _stream_implementation(
         self, messages: list[dict[str, Any]], system: str
     ) -> AsyncIterator[str]:
-        """
-        核心流式实现，包含详细日志和用户反馈。
-        """
+        """核心流式实现，现仅关注API调用和流处理。错误将在上层处理。"""
         logger.debug(f"System prompt: {system}")
-
-        # 为每个 LLM 调用创建一个独特的 emoji 和随机数
         random_emoji = random.choice(EMOJI_LIST)
         random_number = str(random.randint(0, 9))
         call_id = f"{random_emoji}{random_number}"
 
-        # OpenAI的SDK类型检查很严格，这里进行转换
-        final_messages: list[ChatCompletionMessageParam] = messages  # type: ignore
+        # 创建一个新的列表，而不是修改原始列表，以避免副作用
+        final_messages: list[ChatCompletionMessageParam] = []
         if system:
-            final_messages.insert(0, {"role": "system", "content": system})
+            # 类型转换在这里是明确的
+            final_messages.append({"role": "system", "content": system})
+        
+        # 将原始消息追加进去，确保类型兼容
+        final_messages.extend(messages) # type: ignore
+        # 我们使用 type: ignore 是因为我们知道 messages 的结构兼容，
+        # 但这比直接赋值更明确地告诉类型检查器我们的意图。
 
-        stream: AsyncStream[ChatCompletionChunk] | None = None
-        max_retries = 3
-        for attempt in range(max_retries):
-            try:
-                stream = await self.client.chat.completions.create(
-                    model=self.config.model,
-                    messages=final_messages,
-                    stream=True,
-                    temperature=0.5,
-                )
+        try:
+            stream = await self.client.chat.completions.create(
+                model=self.config.model,
+                messages=final_messages,
+                stream=True,
+                temperature=0.5,
+            )
+            
+            # 在输出前，打印最后一个 message 的前 50 个字符
+            last_message_content = final_messages[-1].get('content', '')
+            print(f"LLM ({self.config.model}) 开始输出 [{call_id}]:")
+            print(f"\"\"\"{last_message_content[:50]}...\"\"\"")
+            
+            # 输出 message 的总 token 数 (用 tiktoken 计算)
+            encoding = tiktoken.encoding_for_model("gpt-4o")
+            total_tokens = sum(
+                len(encoding.encode(m["content"])) for m in final_messages if m.get("content")
+            )
+            print(f"⭐️ 总 token 数: {total_tokens}\n")
 
-                # 在输出前，打印最后一个 message 的前 100 个字符 到 dev null
-                print(f"LLM ({self.config.model}) 开始输出 [{call_id}]:")
-                print(f"\"\"\"{final_messages[-1]['content'][:50]}...\"\"\"")
-                # 输出 message 的总 token 数 (用 tiktoken 计算)
+            sys.stdout.flush()
 
-                encoding = tiktoken.encoding_for_model("gpt-4o")
-                total_tokens = sum(
-                    len(encoding.encode(m["content"])) for m in final_messages if m.get("content")
-                )
-                print(f"⭐️ 总 token 数: {total_tokens}\n")
+            # 每 4 个推理 chunk 打印一个点，每 4 个内容 chunk 打印一个星号
+            reasoning_counter = 0
+            content_counter = 0
+            async for chunk in stream:
+                if not chunk or not chunk.choices:
+                    print("~", end="", flush=True)
+                    continue
+                # 检查是否有 'reasoning' (某些模型支持)
+                if (
+                    hasattr(chunk.choices[0].delta, "reasoning_content")
+                    and chunk.choices[0].delta.reasoning_content
+                ):
+                    reasoning_counter += 1
+                    if reasoning_counter % 4 == 0:
+                        sys.stdout.write(random_number)
+                        sys.stdout.flush()
 
-                sys.stdout.flush()
+                if content := chunk.choices[0].delta.content:
+                    content_counter += 1
+                    if content_counter % 4 == 0:
+                        sys.stdout.write(random_emoji)
+                        sys.stdout.flush()
+                    yield content
+            
+            sys.stdout.write(f"\nLLM Call: {call_id} 运行完成\n")
+            sys.stdout.flush()
 
-                # 每 4 个推理 chunk 打印一个点，每 4 个内容 chunk 打印一个星号
-                reasoning_counter = 0
-                content_counter = 0
-                async for chunk in stream:
-                    if not chunk or not chunk.choices:
-                        print("~", end="", flush=True)
-                        continue
-                    # 检查是否有 'reasoning' (某些模型支持)
-                    if (
-                        hasattr(chunk.choices[0].delta, "reasoning_content")
-                        and chunk.choices[0].delta.reasoning_content
-                    ):
-                        reasoning_counter += 1
-                        if reasoning_counter % 4 == 0:
-                            sys.stdout.write(random_number)
-                            sys.stdout.flush()
-
-                    if content := chunk.choices[0].delta.content:
-                        content_counter += 1
-                        if content_counter % 4 == 0:
-                            sys.stdout.write(random_emoji)
-                            sys.stdout.flush()
-                        yield content
-
-                # 用户反馈结束
-                sys.stdout.write(f"\nLLM Call: {call_id} 运行完成\n")
-                sys.stdout.flush()
-                return  # 成功完成，退出重试循环
-
-            except (APIConnectionError, RateLimitError, APIError, RemoteProtocolError) as e:
-                logger.info(
-                    f"LLM API Error on attempt {attempt + 1}/{max_retries} for model {self.config.model}: {e}"
-                )
-                if attempt < max_retries - 1:
-                    wait_time = 2**attempt
-                    logger.info(f"Retrying in {wait_time}s...")
-                    await asyncio.sleep(wait_time)
-                else:
-                    logger.error(
-                        f"LLM call failed after {max_retries} attempts for model {self.config.model}."
-                    )
-                    yield f"ERROR: LLM call failed. {e}"
-            finally:
-                if stream:
-                    await stream.close()
-                    logger.debug(f"LLM Stream closed for call {call_id}.")
-
-        # 如果所有重试都失败了，确保有一个最终的错误信息
-        logger.error(f"LLM call {call_id} failed completely after all retries.")
+        except (APIError, APIConnectionError, RateLimitError, RemoteProtocolError) as e:
+            logger.error(f"Stream implementation caught an exception: {e}")
+            yield f"ERROR: {e}"
 
 
 # 全局客户端实例
 storyboard_client = UnifiedLLMClient(settings.storyboard_llm)
 prompt_client = UnifiedLLMClient(settings.prompt_llm)
+# +++ 新增 JSON 修复器客户端实例 +++
+json_repair_client = UnifiedLLMClient(settings.json_repair_llm)
 
 
 async def test_llm_connections():
+    """测试所有LLM客户端连接"""
     logger.info("Testing LLM connections...")
     test_messages = [{"role": "user", "content": "Hello!"}]
 
@@ -2213,6 +2858,13 @@ async def test_llm_connections():
         logger.error("Prompt client test FAILED.")
     else:
         logger.info(f"Prompt client test OK. Response: {prompt_response[:50]}...")
+
+    logger.info("Testing JSON Repair Client...")
+    json_repair_response = await json_repair_client.chat_completion(test_messages)
+    if "ERROR" in json_repair_response:
+        logger.error("JSON Repair client test FAILED.")
+    else:
+        logger.info(f"JSON Repair client test OK. Response: {json_repair_response[:50]}...")
 </file>
 
 <file path="pyproject.toml">
@@ -2231,6 +2883,8 @@ dependencies = [
     "aiohttp>=3.9.3",
     "tiktoken>=0.6.0",
     "loguru>=0.7.2",
+    "chonkie[all]>=1.1.0",
+    "json-repair>=0.47.7",
 ]
 
 [project.optional-dependencies]

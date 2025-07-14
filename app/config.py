@@ -94,6 +94,17 @@ class Settings:
             max_tokens=_get_int_env("PROMPT_MAX_TOKENS", 8000),
         )
     )
+    # +++ 新增 JSON 修复器 LLM 配置 +++
+    json_repair_llm: LLMConfig = field(
+        default_factory=lambda: LLMConfig(
+            # 默认情况下，可以复用storyboard的配置，但最好用独立的环境变量
+            api_key=_get_str_env("JSON_REPAIR_API_KEY", _get_str_env("STORYBOARD_API_KEY", "")),
+            base_url=_get_str_env("JSON_REPAIR_API_URL", _get_str_env("STORYBOARD_API_URL", "")),
+            model=_get_str_env("JSON_REPAIR_MODEL", "gemini-1.5-flash-latest"),
+            max_tokens=_get_int_env("JSON_REPAIR_MAX_TOKENS", 2048), # 修复任务通常不需要很长的上下文
+        )
+    )
+    # +++ 结束新增部分 +++
 
     # 图像生成配置
     image_width: int = _get_int_env("IMAGE_WIDTH", 1024)
