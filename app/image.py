@@ -16,43 +16,14 @@ import glob
 load_dotenv(override=True)
 
 # 用AI生成画面
-def create_Image(prompt: str) -> str:
-    url = os.getenv("SD_API_URL")
-
-    payload = json.dumps(
-        {
-            "prompt": f"{prompt}{os.getenv('SD_LORA')}",
-            "sampler_name": "Euler",
-            "scheduler": "Exponential",
-            "sampler_index": "Euler",
-            "restore_faces": True,
-            "cfg_scale": 7,
-            "steps": os.getenv("SD_STEPS"),
-            "width": 512,
-            "height": 640,
-            "batch_size": 1,
-            "n_iter": 1,
-        }
-    )
-    headers = {"Content-Type": "application/json"}
-    response = requests.request("POST", url, headers=headers, data=payload)
-    response_data = response.json()
-
-    # 检查是否有错误返回
-    if "detail" in response_data:
-        error_msg = (
-            response_data["detail"][0]["msg"] if response_data["detail"] else "未知错误"
-        )
-        raise Exception(f"生成图片失败: {error_msg}")
-
-    # 检查是否有正确的返回格式
-    if "images" in response_data and len(response_data["images"]) > 0:
-        image_data = response_data["images"][0]
-        del response_data
-        gc.collect()
-        return image_data
-    else:
-        raise Exception("生成图片失败: 返回数据格式不正确")
+def create_Image(prompt: str) -> bytes:
+    base_url = os.getenv("IMAGE_API_URL", "https://image.pollinations.ai/prompt/")
+    model = os.getenv("IMAGE_MODEL", "flux")
+    url = f"{base_url}{requests.utils.quote(prompt)}"
+    params = {"model": model, "width": 512, "height": 640}
+    response = requests.get(url, params=params, timeout=300)
+    response.raise_for_status()
+    return response.content
 
 
 # 调用高清修复
@@ -196,26 +167,13 @@ def get_book_content(book_id: str):
                         while retry_count < 3 and not success:
                             try:
                                 # 生成图片
-                                base64_image = create_Image(prompt)
-
-                                # 保存图片
-                                save_result = save_base64_image(
-                                    base64_image, image_path
-                                )
-                                del base64_image
-                                gc.collect()
-                                if save_result is True:
-                                    success = True
-                                    # 添加image_path字段到JSON数据
-                                    relative_image_path = f"data/book/{book_id}/images/{json_filename}/{item_id}.jpg"
-                                    item["image_path"] = relative_image_path
-                                    json_updated = True
-                                    del save_result
-                                    gc.collect()
-                                else:
-                                    error_msg = f"保存图片失败: {save_result}"
-                                    retry_count += 1
-                                    time.sleep(1)  # 等待1秒后重试
+                                image_bytes = create_Image(prompt)
+                                with open(image_path, "wb") as img_f:
+                                    img_f.write(image_bytes)
+                                success = True
+                                relative_image_path = f"data/book/{book_id}/images/{json_filename}/{item_id}.jpg"
+                                item["image_path"] = relative_image_path
+                                json_updated = True
                             except Exception as e:
                                 error_msg = (
                                     f"生成图片失败 (尝试 {retry_count+1}/3): {str(e)}"
