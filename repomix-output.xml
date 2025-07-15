@@ -59,8 +59,10 @@ app/
   config.py
   ffmpeg_utils.py
   llm_client.py
+  merge_srt.py
   models.py
   pipeline.py
+  restore_punct.py
   tool.py
 tests/
   test_chunker.py
@@ -72,10 +74,15 @@ tests/
 pyproject.toml
 README.md
 run.py
+test_robust_alignment.py
 </directory_structure>
 
 <files>
 This section contains the contents of the repository's files.
+
+<file path="app/services/__init__.py">
+# app/services/__init__.py
+</file>
 
 <file path="app/services/openai_image_provider.py">
 """OpenAI Image API generator (async).
@@ -172,172 +179,6 @@ class FallbackImageGenerator(ImageGenerator):
             err = "".join(format_exception_only(type(e), e)).strip()
             logger.warning(f"Primary image gen failed → {err}. Falling back …")
             return await self._secondary.generate(prompt)
-</file>
-
-<file path="tests/test_openai_image_provider.py">
-# tests/test_openai_image_provider.py
-import asyncio
-import base64
-from unittest.mock import AsyncMock, MagicMock, patch
-import pytest
-from openai import AsyncOpenAI
-
-from app.services.openai_image_provider import OpenAIImageGenerator, FallbackImageGenerator
-
-
-class TestOpenAIImageGenerator:
-    """Test OpenAI Image Generator functionality."""
-
-    @pytest.fixture
-    def mock_openai_client(self):
-        """Create a mock OpenAI client."""
-        client = AsyncMock(spec=AsyncOpenAI)
-        return client
-
-    @pytest.fixture
-    def semaphore(self):
-        """Create a semaphore for testing."""
-        return asyncio.Semaphore(1)
-
-    @pytest.fixture
-    def openai_generator(self, mock_openai_client, semaphore):
-        """Create an OpenAI image generator with mocked client."""
-        generator = OpenAIImageGenerator(
-            client=mock_openai_client,
-            model="dall-e-3",
-            semaphore=semaphore  # 显式传递semaphore以避免配置依赖
-        )
-        # Replace the cached generate method with a non-cached version for testing
-        async def mock_generate(prompt: str) -> bytes:
-            async with generator._sem:
-                from loguru import logger
-                from app.config import settings
-                import base64
-                
-                logger.debug(f"OpenAIImageGenerator → {generator._model}: {prompt[:60]}…")
-
-                # Map size to valid OpenAI sizes
-                size_mapping = {
-                    "1024x1024": "1024x1024",
-                    "1792x1024": "1792x1024", 
-                    "1024x1792": "1024x1792",
-                    "1536x1024": "1536x1024",
-                    "1024x1536": "1024x1536",
-                    "256x256": "256x256",
-                    "512x512": "512x512",
-                }
-                
-                requested_size = f"{settings.image_width}x{settings.image_height}"
-                valid_size = size_mapping.get(requested_size, "1024x1024")
-
-                resp = await generator._client.images.generate(
-                    model=generator._model,
-                    prompt=prompt,
-                    n=1,
-                    size=valid_size,  # type: ignore
-                    response_format="b64_json",
-                )
-
-                try:
-                    if not resp.data or len(resp.data) == 0:
-                        raise ValueError("No image data returned from API")
-                    b64_data = resp.data[0].b64_json
-                    if not b64_data:
-                        raise ValueError("Image response missing `b64_json` field")
-                except (IndexError, AttributeError):
-                    raise ValueError("Image response missing `b64_json` field")
-
-                return base64.b64decode(b64_data)
-        
-        generator.generate = mock_generate
-        return generator
-
-    async def test_generate_success(self, openai_generator, mock_openai_client):
-        """Test successful image generation."""
-        # Mock response
-        test_image_data = b"fake_image_data"
-        test_b64_data = base64.b64encode(test_image_data).decode()
-        
-        mock_response = MagicMock()
-        mock_response.data = [MagicMock()]
-        mock_response.data[0].b64_json = test_b64_data
-        
-        # Set up async mock for images.generate
-        mock_openai_client.images.generate = AsyncMock(return_value=mock_response)
-
-        # Test generation
-        result = await openai_generator.generate("test prompt")
-        
-        # Verify
-        assert result == test_image_data
-        mock_openai_client.images.generate.assert_called_once()
-
-    async def test_generate_missing_data(self, openai_generator, mock_openai_client):
-        """Test handling when API returns no data."""
-        # Mock empty response
-        mock_response = MagicMock()
-        mock_response.data = []
-        
-        # Set up async mock for images.generate
-        mock_openai_client.images.generate = AsyncMock(return_value=mock_response)
-
-        # Test generation should raise error
-        with pytest.raises(ValueError, match="No image data returned from API"):
-            await openai_generator.generate("test prompt")
-
-
-class TestFallbackImageGenerator:
-    """Test Fallback Image Generator functionality."""
-
-    @pytest.fixture
-    def primary_generator(self):
-        """Create a mock primary generator."""
-        return AsyncMock()
-
-    @pytest.fixture
-    def secondary_generator(self):
-        """Create a mock secondary generator."""
-        return AsyncMock()
-
-    @pytest.fixture
-    def fallback_generator(self, primary_generator, secondary_generator):
-        """Create a fallback generator."""
-        return FallbackImageGenerator(primary_generator, secondary_generator)
-
-    async def test_primary_success(self, fallback_generator, primary_generator, secondary_generator):
-        """Test when primary generator succeeds."""
-        test_data = b"primary_image_data"
-        primary_generator.generate.return_value = test_data
-
-        result = await fallback_generator.generate("test prompt")
-        
-        assert result == test_data
-        primary_generator.generate.assert_called_once_with("test prompt")
-        secondary_generator.generate.assert_not_called()
-
-    async def test_primary_fails_secondary_succeeds(self, fallback_generator, primary_generator, secondary_generator):
-        """Test when primary fails but secondary succeeds."""
-        test_data = b"secondary_image_data"
-        primary_generator.generate.side_effect = Exception("Primary failed")
-        secondary_generator.generate.return_value = test_data
-
-        result = await fallback_generator.generate("test prompt")
-        
-        assert result == test_data
-        primary_generator.generate.assert_called_once_with("test prompt")
-        secondary_generator.generate.assert_called_once_with("test prompt")
-
-    async def test_both_fail(self, fallback_generator, primary_generator, secondary_generator):
-        """Test when both generators fail."""
-        primary_generator.generate.side_effect = Exception("Primary failed")
-        secondary_generator.generate.side_effect = Exception("Secondary failed")
-
-        with pytest.raises(Exception, match="Secondary failed"):
-            await fallback_generator.generate("test prompt")
-</file>
-
-<file path="app/services/__init__.py">
-# app/services/__init__.py
 </file>
 
 <file path="app/chunker.py">
@@ -570,6 +411,428 @@ if __name__ == "__main__":
         print("  ", p)
 </file>
 
+<file path="app/merge_srt.py">
+"""
+把「字級」SRT 轉成「句級」SRT
+規則：
+  1. 與前一字幕間隔 ≤ 250 ms 才能併入同句
+  2. 同句總字數 ≤ 7
+輸出：原檔名 + '.sentence.srt'
+"""
+
+import re
+import sys
+import datetime as dt
+from pathlib import Path
+from typing import List
+import srt
+
+GAP_THRESHOLD_MS = 250
+MAX_CHARS = 9
+
+
+# ------------------------------------------------------------
+def _ms(td: dt.timedelta) -> int:
+    """timedelta 轉毫秒"""
+    return int(td.total_seconds() * 1000)
+
+
+def _stripped_len(txt: str) -> int:
+    """計算字數（去掉空格與換行）"""
+    return len(re.sub(r"\s+", "", txt))
+
+
+def merge_subs(subs) -> List:
+    merged = []
+    if not subs:
+        return merged
+
+    current = subs[0]
+    cur_len = _stripped_len(current.content)
+
+    for nxt in subs[1:]:
+        gap = _ms(nxt.start - current.end)
+        nxt_len = _stripped_len(nxt.content)
+
+        can_merge = (gap <= GAP_THRESHOLD_MS) and (cur_len + nxt_len <= MAX_CHARS)
+
+        if can_merge:
+            # 合併文字與時間
+            current.content += nxt.content
+            current.end = nxt.end
+            cur_len += nxt_len
+        else:
+            merged.append(current)
+            current = nxt
+            cur_len = nxt_len
+
+    merged.append(current)
+    # 重新編號
+    for i, s in enumerate(merged, 1):
+        s.index = i
+    return merged
+
+
+def compose_srt(subs) -> str:
+    try:
+        import srt
+
+        return srt.compose(subs)
+    except Exception:
+        # fallback: 手動組裝
+        out_lines = []
+        for s in subs:
+            out_lines.append(str(s.index))
+
+            def _fmt(td):
+                h, rem = divmod(int(td.total_seconds()), 3600)
+                m, s2 = divmod(rem, 60)
+                ms = td.microseconds // 1000
+                return f"{h:02}:{m:02}:{s2:02},{ms:03}"
+
+            out_lines.append(f"{_fmt(s.start)} --> {_fmt(s.end)}")
+            out_lines.append(s.content)
+            out_lines.append("")  # blank line
+        return "\n".join(out_lines)
+
+
+# ------------------------------------------------------------
+def main(path: str):
+    raw = Path(path).read_text(encoding="utf-8", errors="ignore")
+    try:
+        subs = list(srt.parse(raw))
+        new_subs = merge_subs(subs)
+        out_text = compose_srt(new_subs)
+        out_path = Path(path).with_suffix(".sentence.srt")
+        out_path.write_text(out_text, encoding="utf-8")
+        print(f"✅ Success!  Output: {out_path}")
+    except Exception as e:
+        # 讓外部系統可據此重跑
+        sys.stderr.write(f"❌ Failed: {e}\n")
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    if len(sys.argv) != 2:
+        sys.stderr.write("Usage: python merge_srt.py <subtitle.srt>\n")
+        sys.exit(2)
+    main(sys.argv[1])
+</file>
+
+<file path="app/restore_punct.py">
+#!/usr/bin/env python3
+# restore_punct.py
+"""
+用『完整正文』恢復 SRT 標點，並依規則合併成句級字幕。
+
+健壯對齊策略：
+1. 優先使用 SequenceMatcher 全域對齊：自動處理前後多餘文字、中間插入/刪除
+2. 失敗時降級至滑動搜尋：在局部範圍內尋找匹配位置
+3. 部分對齊失敗時仍可輸出，並返回特殊退出碼
+
+依賴：pip install srt
+使用：python restore_punct.py raw.srt full.txt
+      產出：raw.punct.srt  與  raw.sentence.srt
+
+退出碼：
+  0 - 完全成功
+  1 - 嚴重錯誤
+  2 - 參數錯誤
+  100 - 部分對齊失敗但仍輸出（建議人工檢查）
+"""
+
+import re
+import sys
+import datetime as dt
+import difflib
+import warnings
+from pathlib import Path
+from typing import List
+
+# ---------- 可調參數 ----------
+GAP_THRESHOLD_MS = 250  # 同句內兩字最大間隔
+MAX_CHARS = 7  # 同句最大字數
+PUNCT = "，,。：:；;？?！!、…―—「」『』《》〈〉（）()" "''"  # 常見中文標點
+
+# ---------- 健壯對齊策略說明 ----------
+"""
+本腳本實現4種健壯對齊策略：
+
+1. SequenceMatcher 全域對齊（主策略）：
+   - 使用 difflib.SequenceMatcher 找出字幕串與全文的最長公共子序列
+   - 自動處理前後多餘文字、中間插入/刪除的情況
+   - 時間複雜度 O(N log N)，適用於大部分場景
+
+2. 滑動搜尋對齊（降級策略）：
+   - 當全域對齊失敗時，逐字幕在局部範圍內搜尋匹配位置
+   - 容忍小幅度的字幕錯位和文字差異
+   - 時間複雜度 O(N)，快速但可能有誤配
+
+3. 退出碼機制：
+   - 0: 完全成功
+   - 100: 部分對齊失敗但仍輸出（建議人工檢查）
+   - 1: 嚴重錯誤，2: 參數錯誤
+
+4. 容錯處理：
+   - 對齊失敗的字幕保持原樣輸出
+   - 記錄詳細的警告信息供調試使用
+"""
+# ---------------------------
+
+
+# ---------- utils ----------
+def _ms(td: dt.timedelta) -> int:
+    return int(td.total_seconds() * 1000)
+
+
+def _strip_space(txt: str) -> str:
+    return re.sub(r"\s+", "", txt)
+
+
+def _safe_parse_time(t: str) -> dt.timedelta:
+    h, m, s_ms = t.split(":")
+    s, ms = s_ms.split(",")
+    return dt.timedelta(hours=int(h), minutes=int(m), seconds=int(s), milliseconds=int(ms))
+
+
+def _fmt_time(td: dt.timedelta) -> str:
+    h, rem = divmod(int(td.total_seconds()), 3600)
+    m, s = divmod(rem, 60)
+    ms = td.microseconds // 1000
+    return f"{h:02}:{m:02}:{s:02},{ms:03}"
+
+
+# ---------------------------
+
+
+def parse_srt(path: Path):
+    raw = path.read_text(encoding="utf-8", errors="ignore")
+    try:
+        import srt
+
+        return list(srt.parse(raw))
+    except Exception:
+        # 簡單 fallback
+        block_re = re.compile(
+            r"(\d+)\s+([\d:,]+)\s+-->\s+([\d:,]+)\s+([\s\S]*?)(?=\n\n|\Z)",
+            re.MULTILINE,
+        )
+        subs = []
+        for idx, st, et, txt in block_re.findall(raw):
+            subs.append(
+                type(
+                    "Subtitle",
+                    (),
+                    {
+                        "index": int(idx),
+                        "start": _safe_parse_time(st.strip()),
+                        "end": _safe_parse_time(et.strip()),
+                        "content": txt.strip(),
+                    },
+                )()
+            )
+        return subs
+
+
+def compose_srt(subs: List):
+    try:
+        import srt
+
+        return srt.compose(subs)
+    except Exception:
+        out = []
+        for s in subs:
+            out.append(str(s.index))
+            out.append(f"{_fmt_time(s.start)} --> {_fmt_time(s.end)}")
+            out.append(s.content)
+            out.append("")  # blank line
+        return "\n".join(out)
+
+
+# ---------- 核心 ①：健壯的標點注入（支援全域對齊） ----------
+def inject_punct_robust(subs: List, full_text: str):
+    """使用 SequenceMatcher 進行全域對齊，自動處理前後多餘文字"""
+    # 1. 去掉所有空白，只留下字和標點
+    full = _strip_space(full_text)
+    srt_plain = "".join(s.content for s in subs)  # 字幕串（純文字）
+    punct_set = set(PUNCT)
+
+    # 2. 全域對齊
+    sm = difflib.SequenceMatcher(None, srt_plain, full, autojunk=False)
+    blocks = sm.get_matching_blocks()  # (a_idx, b_idx, size)
+
+    # 3. 為每條字幕找對應 slice，並插回標點
+    b_cursor = 0
+    sub_idx = 0
+
+    for a, b, size in blocks:
+        # 跳過不匹配的片段，直接處理匹配塊
+        b_cursor = b
+
+        # 對齊 len=size 的共同片段
+        chars_processed = 0
+        while chars_processed < size and sub_idx < len(subs):
+            word = subs[sub_idx].content
+            wlen = len(word)
+
+            # 從 full[b_cursor:] 收集前置標點
+            prefix = ""
+            while b_cursor < len(full) and full[b_cursor] in punct_set:
+                prefix += full[b_cursor]
+                b_cursor += 1
+
+            # 檢驗字幕文字是否匹配
+            if b_cursor + wlen > len(full) or full[b_cursor : b_cursor + wlen] != word:
+                # 對齊失敗，嘗試降級到滑動搜尋
+                warnings.warn(f"SequenceMatcher 對齊失敗於字幕 {sub_idx+1}: '{word}'，嘗試滑動搜尋")
+                return inject_punct_sliding(subs, full_text)
+
+            b_cursor += wlen
+            chars_processed += wlen
+
+            # 收集後置標點
+            postfix = ""
+            while b_cursor < len(full) and full[b_cursor] in punct_set:
+                postfix += full[b_cursor]
+                b_cursor += 1
+
+            subs[sub_idx].content = prefix + word + postfix
+            sub_idx += 1
+
+    # 4. 處理剩餘未對齊的字幕（保持原樣）
+    if sub_idx < len(subs):
+        warnings.warn(f"部分字幕未能對齊：從第 {sub_idx+1} 條開始")
+
+    return subs
+
+
+def inject_punct_sliding(subs: List, full_text: str):
+    """滑動搜尋對齊策略（降級方案）"""
+    full = _strip_space(full_text)
+    punct_set = set(PUNCT)
+    cursor = 0
+
+    for i, s in enumerate(subs):
+        word = s.content
+
+        # 在接下來 500 字內搜尋
+        search_end = min(len(full), cursor + 500)
+        pos = full.find(word, cursor, search_end)
+
+        if pos == -1:
+            # 找不到，保持原樣並記錄警告
+            warnings.warn(f"字幕 {i+1} 無法對齊: '{word}'")
+            continue
+
+        # 收集前置標點
+        prefix = ""
+        p = pos
+        while p > cursor and full[p - 1] in punct_set:
+            p -= 1
+            prefix = full[p] + prefix
+
+        # 收集後置標點
+        postfix = ""
+        p = pos + len(word)
+        while p < len(full) and full[p] in punct_set:
+            postfix += full[p]
+            p += 1
+
+        s.content = prefix + word + postfix
+        cursor = pos + len(word)
+
+    return subs
+
+
+def inject_punct(subs: List, full_text: str):
+    """標點注入主函數，優先使用健壯對齊，失敗時降級"""
+    try:
+        return inject_punct_robust(subs, full_text)
+    except Exception as e:
+        warnings.warn(f"健壯對齊失敗: {e}，降級至滑動搜尋")
+        return inject_punct_sliding(subs, full_text)
+
+
+# ---------- 核心 ②：合併為句 ----------
+def merge_to_sentence(subs: List):
+    merged = []
+    cur = subs[0]
+    cur_len = len(_strip_space(cur.content))
+
+    for nxt in subs[1:]:
+        gap = _ms(nxt.start - cur.end)
+        nxt_len = len(_strip_space(nxt.content))
+        # 強制斷句：遇到。？！ 或不符規則
+        force_break = any(ch in cur.content for ch in "。？！?！")
+        can_merge = (
+            (gap <= GAP_THRESHOLD_MS) and (cur_len + nxt_len <= MAX_CHARS) and not force_break
+        )
+
+        if can_merge:
+            cur.content += nxt.content
+            cur.end = nxt.end
+            cur_len += nxt_len
+        else:
+            merged.append(cur)
+            cur = nxt
+            cur_len = nxt_len
+    merged.append(cur)
+
+    # 重新編號
+    for i, s in enumerate(merged, 1):
+        s.index = i
+    return merged
+
+
+# ---------- main ----------
+def main(srt_path: str, txt_path: str):
+    srt_file = Path(srt_path)
+    txt_file = Path(txt_path)
+    subs = parse_srt(srt_file)
+    full_text = txt_file.read_text(encoding="utf-8", errors="ignore")
+
+    # 記錄警告數量
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+
+        # ① 標點恢復（使用健壯對齊策略）
+        subs_with_punct = inject_punct(subs, full_text)
+        (
+            srt_file.with_suffix(".punct.srt").write_text(
+                compose_srt(subs_with_punct), encoding="utf-8"
+            )
+        )
+
+        # ② 句級合併
+        sentence_subs = merge_to_sentence(subs_with_punct)
+        out_path = srt_file.with_suffix(".sentence.srt")
+        out_path.write_text(compose_srt(sentence_subs), encoding="utf-8")
+
+        print(f"✅ 已輸出：\n  • {srt_file.with_suffix('.punct.srt').name}\n  • {out_path.name}")
+
+        # 如果有警告，返回特殊退出碼
+        if w:
+            print(f"⚠️  處理過程中有 {len(w)} 個警告：", file=sys.stderr)
+            for warning in w:
+                print(f"  - {warning.message}", file=sys.stderr)
+            return 100  # 部分對齊失敗但仍輸出
+
+        return 0  # 完全成功
+
+
+# ---------- CLI ----------
+if __name__ == "__main__":
+    if len(sys.argv) != 3:
+        print("Usage: python restore_punct.py raw.srt full.txt", file=sys.stderr)
+        sys.exit(2)
+    try:
+        exit_code = main(sys.argv[1], sys.argv[2])
+        sys.exit(exit_code)
+    except Exception as e:
+        print(f"❌ 失敗：{e}", file=sys.stderr)
+        sys.exit(1)
+</file>
+
 <file path="tests/test_chunker.py">
 # -----------------------
 # File: tests/test_chunker.py
@@ -619,6 +882,168 @@ def teardown_module(module):  # noqa: D401  # pylint: disable=missing-function-d
             f.unlink()
         except Exception:  # pragma: no cover
             pass
+</file>
+
+<file path="tests/test_openai_image_provider.py">
+# tests/test_openai_image_provider.py
+import asyncio
+import base64
+from unittest.mock import AsyncMock, MagicMock, patch
+import pytest
+from openai import AsyncOpenAI
+
+from app.services.openai_image_provider import OpenAIImageGenerator, FallbackImageGenerator
+
+
+class TestOpenAIImageGenerator:
+    """Test OpenAI Image Generator functionality."""
+
+    @pytest.fixture
+    def mock_openai_client(self):
+        """Create a mock OpenAI client."""
+        client = AsyncMock(spec=AsyncOpenAI)
+        return client
+
+    @pytest.fixture
+    def semaphore(self):
+        """Create a semaphore for testing."""
+        return asyncio.Semaphore(1)
+
+    @pytest.fixture
+    def openai_generator(self, mock_openai_client, semaphore):
+        """Create an OpenAI image generator with mocked client."""
+        generator = OpenAIImageGenerator(
+            client=mock_openai_client,
+            model="dall-e-3",
+            semaphore=semaphore  # 显式传递semaphore以避免配置依赖
+        )
+        # Replace the cached generate method with a non-cached version for testing
+        async def mock_generate(prompt: str) -> bytes:
+            async with generator._sem:
+                from loguru import logger
+                from app.config import settings
+                import base64
+                
+                logger.debug(f"OpenAIImageGenerator → {generator._model}: {prompt[:60]}…")
+
+                # Map size to valid OpenAI sizes
+                size_mapping = {
+                    "1024x1024": "1024x1024",
+                    "1792x1024": "1792x1024", 
+                    "1024x1792": "1024x1792",
+                    "1536x1024": "1536x1024",
+                    "1024x1536": "1024x1536",
+                    "256x256": "256x256",
+                    "512x512": "512x512",
+                }
+                
+                requested_size = f"{settings.image_width}x{settings.image_height}"
+                valid_size = size_mapping.get(requested_size, "1024x1024")
+
+                resp = await generator._client.images.generate(
+                    model=generator._model,
+                    prompt=prompt,
+                    n=1,
+                    size=valid_size,  # type: ignore
+                    response_format="b64_json",
+                )
+
+                try:
+                    if not resp.data or len(resp.data) == 0:
+                        raise ValueError("No image data returned from API")
+                    b64_data = resp.data[0].b64_json
+                    if not b64_data:
+                        raise ValueError("Image response missing `b64_json` field")
+                except (IndexError, AttributeError):
+                    raise ValueError("Image response missing `b64_json` field")
+
+                return base64.b64decode(b64_data)
+        
+        generator.generate = mock_generate
+        return generator
+
+    async def test_generate_success(self, openai_generator, mock_openai_client):
+        """Test successful image generation."""
+        # Mock response
+        test_image_data = b"fake_image_data"
+        test_b64_data = base64.b64encode(test_image_data).decode()
+        
+        mock_response = MagicMock()
+        mock_response.data = [MagicMock()]
+        mock_response.data[0].b64_json = test_b64_data
+        
+        # Set up async mock for images.generate
+        mock_openai_client.images.generate = AsyncMock(return_value=mock_response)
+
+        # Test generation
+        result = await openai_generator.generate("test prompt")
+        
+        # Verify
+        assert result == test_image_data
+        mock_openai_client.images.generate.assert_called_once()
+
+    async def test_generate_missing_data(self, openai_generator, mock_openai_client):
+        """Test handling when API returns no data."""
+        # Mock empty response
+        mock_response = MagicMock()
+        mock_response.data = []
+        
+        # Set up async mock for images.generate
+        mock_openai_client.images.generate = AsyncMock(return_value=mock_response)
+
+        # Test generation should raise error
+        with pytest.raises(ValueError, match="No image data returned from API"):
+            await openai_generator.generate("test prompt")
+
+
+class TestFallbackImageGenerator:
+    """Test Fallback Image Generator functionality."""
+
+    @pytest.fixture
+    def primary_generator(self):
+        """Create a mock primary generator."""
+        return AsyncMock()
+
+    @pytest.fixture
+    def secondary_generator(self):
+        """Create a mock secondary generator."""
+        return AsyncMock()
+
+    @pytest.fixture
+    def fallback_generator(self, primary_generator, secondary_generator):
+        """Create a fallback generator."""
+        return FallbackImageGenerator(primary_generator, secondary_generator)
+
+    async def test_primary_success(self, fallback_generator, primary_generator, secondary_generator):
+        """Test when primary generator succeeds."""
+        test_data = b"primary_image_data"
+        primary_generator.generate.return_value = test_data
+
+        result = await fallback_generator.generate("test prompt")
+        
+        assert result == test_data
+        primary_generator.generate.assert_called_once_with("test prompt")
+        secondary_generator.generate.assert_not_called()
+
+    async def test_primary_fails_secondary_succeeds(self, fallback_generator, primary_generator, secondary_generator):
+        """Test when primary fails but secondary succeeds."""
+        test_data = b"secondary_image_data"
+        primary_generator.generate.side_effect = Exception("Primary failed")
+        secondary_generator.generate.return_value = test_data
+
+        result = await fallback_generator.generate("test prompt")
+        
+        assert result == test_data
+        primary_generator.generate.assert_called_once_with("test prompt")
+        secondary_generator.generate.assert_called_once_with("test prompt")
+
+    async def test_both_fail(self, fallback_generator, primary_generator, secondary_generator):
+        """Test when both generators fail."""
+        primary_generator.generate.side_effect = Exception("Primary failed")
+        secondary_generator.generate.side_effect = Exception("Secondary failed")
+
+        with pytest.raises(Exception, match="Secondary failed"):
+            await fallback_generator.generate("test prompt")
 </file>
 
 <file path=".env_old">
@@ -770,61 +1195,6 @@ class AudioGenerator(ABC):
         pass
 </file>
 
-<file path="app/services/image_provider.py">
-# app/services/image_provider.py
-import urllib.parse
-import aiohttp
-import asyncio
-from loguru import logger
-
-from .base import ImageGenerator
-from ..config import settings
-from ..cache import cache
-
-# expose OpenAI classes when imported via this module
-from .openai_image_provider import OpenAIImageGenerator, FallbackImageGenerator
-
-# Export all classes for external use
-__all__ = ["PollinationsImageGenerator", "OpenAIImageGenerator", "FallbackImageGenerator"]
-
-
-class PollinationsImageGenerator(ImageGenerator):
-    """使用 Pollinations.ai API 的图像生成器实现。"""
-
-    def __init__(self, session: aiohttp.ClientSession, max_concurrent: int | None = None):
-        # 使用专用的并发设置，如果没有提供则使用配置中的值
-        concurrent_limit = max_concurrent or settings.pollinations_image_threads
-        # 向后兼容：如果专用设置不存在，则使用通用设置
-        if concurrent_limit == settings.pollinations_image_threads and concurrent_limit == 8:
-            # 这意味着用户没有设置POLLINATIONS_IMAGE_THREADS，检查是否设置了IMAGE_THREADS
-            concurrent_limit = settings.image_threads
-        
-        self.semaphore = asyncio.Semaphore(concurrent_limit)
-        self._session = session
-        logger.debug(f"PollinationsImageGenerator initialized with {concurrent_limit} concurrent threads")
-
-    @cache(settings.paths.cache_image, "binary")
-    async def generate(self, prompt: str) -> bytes:
-        async with self.semaphore:
-            encoded_prompt = urllib.parse.quote(prompt)
-            url = (
-                f"https://image.pollinations.ai/prompt/{encoded_prompt}"
-                f"?width={settings.image_width}&height={settings.image_height}&nologo=true&model=flux"
-            )
-
-            try:
-                logger.debug(f"Requesting image from URL: {url.split('?')[0]}...")
-                timeout = aiohttp.ClientTimeout(total=300)
-                async with self._session.get(url, timeout=timeout) as response:
-                    response.raise_for_status()
-                    return await response.read()
-            except aiohttp.ClientError as e:
-                logger.error(
-                    f"Image generation API request failed for prompt '{prompt[:30]}...': {e}"
-                )
-                raise
-</file>
-
 <file path="app/stages/__init__.py">
 # This file makes the 'stages' directory a Python package.
 </file>
@@ -884,6 +1254,290 @@ def extract_chapter_id_and_name(title):
 
 <file path=".python-version">
 3.13
+</file>
+
+<file path="test_robust_alignment.py">
+#!/usr/bin/env python3
+"""
+测试健壮对齐功能的测试脚本
+"""
+
+import tempfile
+import sys
+from pathlib import Path
+
+# 添加app模块到路径
+sys.path.insert(0, str(Path(__file__).parent / "app"))
+from app.restore_punct import (
+    inject_punct_robust,
+    inject_punct_sliding,
+    parse_srt,
+)
+
+
+def create_test_srt():
+    """创建测试SRT内容"""
+    srt_content = """1
+00:00:01,000 --> 00:00:02,000
+今天
+
+2
+00:00:02,000 --> 00:00:03,000
+天氣
+
+3
+00:00:03,000 --> 00:00:04,000
+很好
+
+4
+00:00:04,000 --> 00:00:05,000
+我們
+
+5
+00:00:05,000 --> 00:00:06,000
+去
+
+6
+00:00:06,000 --> 00:00:07,000
+公園
+
+7
+00:00:07,000 --> 00:00:08,000
+走走
+"""
+    return srt_content
+
+
+def test_scenario_1():
+    """测试场景1：完全匹配"""
+    print("=== 测试场景1：完全匹配 ===")
+    srt_content = create_test_srt()
+    full_text = "今天天氣很好，我們去公園走走。"
+
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".srt", delete=False) as f:
+        f.write(srt_content)
+        srt_path = f.name
+
+    subs = parse_srt(Path(srt_path))
+    result = inject_punct_robust(subs, full_text)
+
+    print("原始字幕:", [s.content for s in parse_srt(Path(srt_path))])
+    print("加標點後:", [s.content for s in result])
+    Path(srt_path).unlink()  # 清理
+    print("✅ 测试通过\n")
+
+
+def test_scenario_2():
+    """测试场景2：前后有多余文字"""
+    print("=== 测试场景2：前后有多余文字 ===")
+    srt_content = create_test_srt()
+    full_text = "歡迎收看今日節目。今天天氣很好，我們去公園走走。感謝收看！"
+
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".srt", delete=False) as f:
+        f.write(srt_content)
+        srt_path = f.name
+
+    subs = parse_srt(Path(srt_path))
+    result = inject_punct_robust(subs, full_text)
+
+    print("原始字幕:", [s.content for s in parse_srt(Path(srt_path))])
+    print("加標點後:", [s.content for s in result])
+    Path(srt_path).unlink()  # 清理
+    print("✅ 测试通过\n")
+
+
+def test_scenario_3():
+    """测试场景3：中间有插入文字"""
+    print("=== 测试场景3：中间有插入文字 ===")
+    srt_content = create_test_srt()
+    full_text = "今天天氣真的很好，我們一起去公園走走。"
+
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".srt", delete=False) as f:
+        f.write(srt_content)
+        srt_path = f.name
+
+    subs = parse_srt(Path(srt_path))
+    result = inject_punct_robust(subs, full_text)
+
+    print("原始字幕:", [s.content for s in parse_srt(Path(srt_path))])
+    print("加標點後:", [s.content for s in result])
+    Path(srt_path).unlink()  # 清理
+    print("✅ 测试通过\n")
+
+
+def test_sliding_fallback():
+    """测试滑动搜索降级机制"""
+    print("=== 测试滑动搜索降级机制 ===")
+    srt_content = """1
+00:00:01,000 --> 00:00:02,000
+今天
+
+2
+00:00:02,000 --> 00:00:03,000
+好
+
+3
+00:00:03,000 --> 00:00:04,000
+走走
+"""
+    full_text = "今天天氣很好，我們去公園走走。"
+
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".srt", delete=False) as f:
+        f.write(srt_content)
+        srt_path = f.name
+
+    subs = parse_srt(Path(srt_path))
+    result = inject_punct_sliding(subs, full_text)
+
+    print("原始字幕:", [s.content for s in parse_srt(Path(srt_path))])
+    print("滑動搜尋後:", [s.content for s in result])
+    Path(srt_path).unlink()  # 清理
+    print("✅ 测试通过\n")
+
+
+if __name__ == "__main__":
+    print("开始测试健壮对齐功能...\n")
+
+    test_scenario_1()
+    test_scenario_2()
+    test_scenario_3()
+    test_sliding_fallback()
+
+    print("🎉 所有测试完成！")
+</file>
+
+<file path="app/services/image_provider.py">
+# app/services/image_provider.py
+import urllib.parse
+import aiohttp
+import asyncio
+from loguru import logger
+
+from .base import ImageGenerator
+from ..config import settings
+from ..cache import cache
+
+# expose OpenAI classes when imported via this module
+from .openai_image_provider import OpenAIImageGenerator, FallbackImageGenerator
+
+# Export all classes for external use
+__all__ = ["PollinationsImageGenerator", "OpenAIImageGenerator", "FallbackImageGenerator"]
+
+
+class PollinationsImageGenerator(ImageGenerator):
+    """使用 Pollinations.ai API 的图像生成器实现。"""
+
+    def __init__(self, session: aiohttp.ClientSession, max_concurrent: int | None = None):
+        # 使用专用的并发设置，如果没有提供则使用配置中的值
+        concurrent_limit = max_concurrent or settings.pollinations_image_threads
+        # 向后兼容：如果专用设置不存在，则使用通用设置
+        if concurrent_limit == settings.pollinations_image_threads and concurrent_limit == 8:
+            # 这意味着用户没有设置POLLINATIONS_IMAGE_THREADS，检查是否设置了IMAGE_THREADS
+            concurrent_limit = settings.image_threads
+        
+        self.semaphore = asyncio.Semaphore(concurrent_limit)
+        self._session = session
+        logger.debug(f"PollinationsImageGenerator initialized with {concurrent_limit} concurrent threads")
+
+    @cache(settings.paths.cache_image, "binary")
+    async def generate(self, prompt: str) -> bytes:
+        async with self.semaphore:
+            encoded_prompt = urllib.parse.quote(prompt)
+            url = (
+                f"https://image.pollinations.ai/prompt/{encoded_prompt}"
+                f"?width={settings.image_width}&height={settings.image_height}&nologo=true&model=flux"
+            )
+
+            try:
+                logger.debug(f"Requesting image from URL: {url.split('?')[0]}...")
+                timeout = aiohttp.ClientTimeout(total=300)
+                async with self._session.get(url, timeout=timeout) as response:
+                    response.raise_for_status()
+                    return await response.read()
+            except aiohttp.ClientError as e:
+                logger.error(
+                    f"Image generation API request failed for prompt '{prompt[:30]}...': {e}"
+                )
+                raise
+</file>
+
+<file path=".gitignore">
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+data
+
+.mp4
+.env
+
+prompt_history
+</file>
+
+<file path="app/models.py">
+# app/models.py
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Optional
+
+
+@dataclass
+class Shot:
+    """
+    表示一个独立的分镜（或镜头）。
+    这是我们流水线中处理的基本工作单元。
+    """
+
+    # 核心内容
+    shot_id: int
+    chapter_index: int
+    original_text: str
+
+    # 生成的数据 (最终使用的提示词)
+    image_prompt: Optional[str] = None
+
+    # 生成的资产路径
+    storyboard_path: Optional[Path] = None  # 指向分镜脚本JSON文件的路径
+    refined_prompt_path: Optional[Path] = None  # 指向优化后的提示词TXT文件的路径
+    image_path: Optional[Path] = None
+    audio_path: Optional[Path] = None
+    srt_path: Optional[Path] = None
+    video_clip_path: Optional[Path] = None
+
+    # 状态
+    error: Optional[str] = None
+
+    def get_full_id(self) -> str:
+        """返回唯一的镜头ID，格式为 '章节-镜头'"""
+        return f"{self.chapter_index}-{self.shot_id}"
+
+
+@dataclass
+class Chapter:
+    """表示一个完整的章节，包含多个分镜。"""
+
+    index: int
+    content: str
+    shots: list[Shot] = field(default_factory=list)
+
+
+@dataclass
+class TextChunk:
+    """表示一个经过语义分割的文本块，是送入LLM进行处理的基本单元。"""
+
+    chunk_id: int  # 块的顺序ID
+    text: str  # 块的文本内容
+    char_start_index: int  # 在原始全文中的起始字符索引
+    char_end_index: int  # 在原始全文中的结束字符索引
+
+    def __len__(self) -> int:
+        return len(self.text)
 </file>
 
 <file path=".env.sample">
@@ -978,228 +1632,6 @@ VIDEO_HEIGHT=1280
 # -----------------------------------------------------------------------------
 # 是否开启详细日志
 VERBOSE_LOGGING=true
-</file>
-
-<file path=".gitignore">
-# Python-generated files
-__pycache__/
-*.py[oc]
-build/
-dist/
-wheels/
-*.egg-info
-
-# Virtual environments
-.venv
-data
-
-.mp4
-.env
-
-prompt_history
-</file>
-
-<file path="app/ffmpeg_utils.py">
-# app/ffmpeg_utils.py
-import subprocess
-import platform
-import os
-import functools
-from loguru import logger
-
-
-@functools.lru_cache(maxsize=None)
-def _ffmpeg_has_encoder(encoder: str) -> bool:
-    """
-    缓存化地检查 FFmpeg 是否支持指定的编码器。
-    使用 lru_cache 避免重复调用 ffmpeg 进程。
-    """
-    try:
-        result = subprocess.run(
-            ["ffmpeg", "-encoders"], capture_output=True, text=True, check=True
-        )
-        # 增加空格以确保匹配到完整的编码器名称，避免子字符串问题
-        return f" {encoder} " in result.stdout
-    except (FileNotFoundError, subprocess.CalledProcessError):
-        return False
-
-
-@functools.lru_cache(maxsize=1)
-def get_ffmpeg_gpu_params():
-    """
-    自动检测并返回适用于当前系统的 FFmpeg GPU 加速参数。
-    使用 lru_cache 缓存结果，避免重复检测。
-
-    Returns:
-        dict: 包含 codec, preset, threads, 和 ffmpeg_params 的字典。
-    """
-    system = platform.system()
-    logger.info(f"检测操作系统: {system}")
-
-    # 检查 ffmpeg 是否存在
-    try:
-        subprocess.run(["ffmpeg", "-version"], capture_output=True, check=True)
-    except (FileNotFoundError, subprocess.CalledProcessError):
-        logger.warning("系统中未找到 ffmpeg 或无法执行。将使用纯 CPU 编码。")
-        return {
-            "codec": "libx264",
-            "preset": "ultrafast",
-            "threads": os.cpu_count() or 2,
-            "ffmpeg_params": [],
-        }
-
-    # NVIDIA (Windows/Linux)
-    if system in ["Windows", "Linux"]:
-        try:
-            result = subprocess.run(
-                ["ffmpeg", "-hwaccels"], capture_output=True, text=True
-            )
-            if "cuda" in result.stdout:
-                logger.info("✅ 检测到 NVIDIA CUDA 支持。")
-                # 检查 h264_nvenc 编码器
-                result = subprocess.run(
-                    ["ffmpeg", "-encoders"], capture_output=True, text=True
-                )
-                if "h264_nvenc" in result.stdout:
-                    logger.info("✅ 检测到 h264_nvenc 编码器。启用 NVIDIA GPU 加速。")
-                    return {
-                        "codec": "h264_nvenc",
-                        "preset": "fast",
-                        "threads": os.cpu_count() or 2,
-                        # '-hwaccel cuda' 更多用于解码，编码器h264_nvenc会自动使用GPU。
-                        "ffmpeg_params": [],
-                    }
-        except (FileNotFoundError, subprocess.CalledProcessError):
-            pass  # ffmpeg 未找到或执行失败，继续尝试其他选项
-
-    # Apple Silicon / Intel (macOS)
-    if system == "Darwin":
-        try:
-            result = subprocess.run(
-                ["ffmpeg", "-hwaccels"], capture_output=True, text=True
-            )
-            if "videotoolbox" in result.stdout:
-                logger.info("✅ 检测到 Apple VideoToolbox 支持。")
-                
-                # 优先检查 h264, hevc, prores
-                codec_preference = ("h264", "hevc", "prores")
-                for codec_prefix in codec_preference:
-                    vt_codec = f"{codec_prefix}_videotoolbox"
-                    if _ffmpeg_has_encoder(vt_codec):
-                        logger.info(f"✅ 检测到 {vt_codec} 编码器。启用 macOS 硬件加速。")
-                        
-                        params = [
-                            "-hwaccel", "videotoolbox",
-                            "-hwaccel_output_format", "videotoolbox",
-                            "-allow_sw", "0",  # 强制硬件，失败则报错
-                        ]
-                        
-                        if codec_prefix != "prores":
-                            params.extend(["-realtime", "1"]) # 尽可能低延时
-                            params.extend(["-pix_fmt", "yuv420p"])
-                        else:
-                            # ProRes 使用不同的像素格式
-                            params.extend(["-pix_fmt", "yuv422p10le"])
-                            
-                        return {
-                            "codec": vt_codec,
-                            "preset": None,  # VideoToolbox 不使用 preset
-                            "threads": None, # 硬编不依赖此线程数
-                            "ffmpeg_params": params,
-                        }
-        except (FileNotFoundError, subprocess.CalledProcessError) as e:
-            logger.warning(f"在 macOS 上检测 VideoToolbox 时出错: {e}，将回退到 CPU。")
-            pass
-
-    # Intel Quick Sync Video (Windows/Linux)
-    if system in ["Windows", "Linux"]:
-        try:
-            result = subprocess.run(
-                ["ffmpeg", "-hwaccels"], capture_output=True, text=True
-            )
-            if "qsv" in result.stdout:
-                logger.info("✅ 检测到 Intel QSV 支持。")
-                result = subprocess.run(
-                    ["ffmpeg", "-encoders"], capture_output=True, text=True
-                )
-                if "h264_qsv" in result.stdout:
-                    logger.info("✅ 检测到 h264_qsv 编码器。启用 Intel QSV 加速。")
-                    return {
-                        "codec": "h264_qsv",
-                        "preset": "fast",
-                        "threads": os.cpu_count() or 2,
-                        "ffmpeg_params": ["-load_plugin", "hevc_hw", "-hwaccel", "qsv"],
-                    }
-        except (FileNotFoundError, subprocess.CalledProcessError):
-            pass
-
-    logger.warning("⚠️ 未检测到可用的 GPU 加速硬件。将回退到 CPU (libx264) 进行编码。")
-    return {
-        "codec": "libx264",
-        "preset": "ultrafast",
-        "threads": os.cpu_count() or 2,
-        "ffmpeg_params": [],
-    }
-</file>
-
-<file path="app/models.py">
-# app/models.py
-from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Optional
-
-
-@dataclass
-class Shot:
-    """
-    表示一个独立的分镜（或镜头）。
-    这是我们流水线中处理的基本工作单元。
-    """
-
-    # 核心内容
-    shot_id: int
-    chapter_index: int
-    original_text: str
-
-    # 生成的数据 (最终使用的提示词)
-    image_prompt: Optional[str] = None
-
-    # 生成的资产路径
-    storyboard_path: Optional[Path] = None  # 指向分镜脚本JSON文件的路径
-    refined_prompt_path: Optional[Path] = None  # 指向优化后的提示词TXT文件的路径
-    image_path: Optional[Path] = None
-    audio_path: Optional[Path] = None
-    srt_path: Optional[Path] = None
-    video_clip_path: Optional[Path] = None
-
-    # 状态
-    error: Optional[str] = None
-
-    def get_full_id(self) -> str:
-        """返回唯一的镜头ID，格式为 '章节-镜头'"""
-        return f"{self.chapter_index}-{self.shot_id}"
-
-
-@dataclass
-class Chapter:
-    """表示一个完整的章节，包含多个分镜。"""
-
-    index: int
-    content: str
-    shots: list[Shot] = field(default_factory=list)
-
-
-@dataclass
-class TextChunk:
-    """表示一个经过语义分割的文本块，是送入LLM进行处理的基本单元。"""
-
-    chunk_id: int  # 块的顺序ID
-    text: str  # 块的文本内容
-    char_start_index: int  # 在原始全文中的起始字符索引
-    char_end_index: int  # 在原始全文中的结束字符索引
-
-    def __len__(self) -> int:
-        return len(self.text)
 </file>
 
 <file path="app/stages/content.py">
@@ -1488,6 +1920,145 @@ def cache(cache_path: Path, result_type: str = "text"):
         return wrapper
 
     return decorator
+</file>
+
+<file path="app/ffmpeg_utils.py">
+# app/ffmpeg_utils.py
+import subprocess
+import platform
+import os
+import functools
+from loguru import logger
+
+
+@functools.lru_cache(maxsize=None)
+def _ffmpeg_has_encoder(encoder: str) -> bool:
+    """
+    缓存化地检查 FFmpeg 是否支持指定的编码器。
+    使用 lru_cache 避免重复调用 ffmpeg 进程。
+    """
+    try:
+        result = subprocess.run(
+            ["ffmpeg", "-encoders"], capture_output=True, text=True, check=True
+        )
+        # 增加空格以确保匹配到完整的编码器名称，避免子字符串问题
+        return f" {encoder} " in result.stdout
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        return False
+
+
+@functools.lru_cache(maxsize=1)
+def get_ffmpeg_gpu_params():
+    """
+    自动检测并返回适用于当前系统的 FFmpeg GPU 加速参数。
+    使用 lru_cache 缓存结果，避免重复检测。
+
+    Returns:
+        dict: 包含 codec, preset, threads, 和 ffmpeg_params 的字典。
+    """
+    system = platform.system()
+    logger.info(f"检测操作系统: {system}")
+
+    # 检查 ffmpeg 是否存在
+    try:
+        subprocess.run(["ffmpeg", "-version"], capture_output=True, check=True)
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        logger.warning("系统中未找到 ffmpeg 或无法执行。将使用纯 CPU 编码。")
+        return {
+            "codec": "libx264",
+            "preset": "ultrafast",
+            "threads": os.cpu_count() or 2,
+            "ffmpeg_params": [],
+        }
+
+    # NVIDIA (Windows/Linux)
+    if system in ["Windows", "Linux"]:
+        try:
+            result = subprocess.run(
+                ["ffmpeg", "-hwaccels"], capture_output=True, text=True
+            )
+            if "cuda" in result.stdout:
+                logger.info("✅ 检测到 NVIDIA CUDA 支持。")
+                # 检查 h264_nvenc 编码器
+                result = subprocess.run(
+                    ["ffmpeg", "-encoders"], capture_output=True, text=True
+                )
+                if "h264_nvenc" in result.stdout:
+                    logger.info("✅ 检测到 h264_nvenc 编码器。启用 NVIDIA GPU 加速。")
+                    return {
+                        "codec": "h264_nvenc",
+                        "preset": "fast",
+                        "threads": os.cpu_count() or 2,
+                        # '-hwaccel cuda' 更多用于解码，编码器h264_nvenc会自动使用GPU。
+                        "ffmpeg_params": [],
+                    }
+        except (FileNotFoundError, subprocess.CalledProcessError):
+            pass  # ffmpeg 未找到或执行失败，继续尝试其他选项
+
+    # Apple Silicon / Intel (macOS)
+    if system == "Darwin":
+        try:
+            result = subprocess.run(
+                ["ffmpeg", "-hwaccels"], capture_output=True, text=True
+            )
+            if "videotoolbox" in result.stdout:
+                logger.info("✅ 检测到 Apple VideoToolbox 支持。")
+                
+                # 优先检查 h264, hevc, prores
+                codec_preference = ("h264", "hevc", "prores")
+                for codec_prefix in codec_preference:
+                    vt_codec = f"{codec_prefix}_videotoolbox"
+                    if _ffmpeg_has_encoder(vt_codec):
+                        logger.info(f"✅ 检测到 {vt_codec} 编码器。启用 macOS 硬件加速。")
+                        
+                        # -hwaccel 是解码参数，不适用于此处的编码场景
+                        params = []
+                        
+                        if codec_prefix != "prores":
+                            params.extend(["-pix_fmt", "yuv420p"])
+                        else:
+                            # ProRes 使用不同的像素格式
+                            params.extend(["-pix_fmt", "yuv422p10le"])
+                            
+                        return {
+                            "codec": vt_codec,
+                            "preset": "ultrafast",  # VideoToolbox 不使用 preset, 但 moviepy 需要一个值
+                            "threads": None, # 硬编不依赖此线程数
+                            "ffmpeg_params": params,
+                        }
+        except (FileNotFoundError, subprocess.CalledProcessError) as e:
+            logger.warning(f"在 macOS 上检测 VideoToolbox 时出错: {e}，将回退到 CPU。")
+            pass
+
+    # Intel Quick Sync Video (Windows/Linux)
+    if system in ["Windows", "Linux"]:
+        try:
+            result = subprocess.run(
+                ["ffmpeg", "-hwaccels"], capture_output=True, text=True
+            )
+            if "qsv" in result.stdout:
+                logger.info("✅ 检测到 Intel QSV 支持。")
+                result = subprocess.run(
+                    ["ffmpeg", "-encoders"], capture_output=True, text=True
+                )
+                if "h264_qsv" in result.stdout:
+                    logger.info("✅ 检测到 h264_qsv 编码器。启用 Intel QSV 加速。")
+                    return {
+                        "codec": "h264_qsv",
+                        "preset": "fast",
+                        "threads": os.cpu_count() or 2,
+                        "ffmpeg_params": ["-load_plugin", "hevc_hw", "-hwaccel", "qsv"],
+                    }
+        except (FileNotFoundError, subprocess.CalledProcessError):
+            pass
+
+    logger.warning("⚠️ 未检测到可用的 GPU 加速硬件。将回退到 CPU (libx264) 进行编码。")
+    return {
+        "codec": "libx264",
+        "preset": "ultrafast",
+        "threads": os.cpu_count() or 2,
+        "ffmpeg_params": [],
+    }
 </file>
 
 <file path="README.md">
@@ -2130,162 +2701,6 @@ async def generate_all_assets(
     return list(final_processed_shots)
 </file>
 
-<file path="app/config.py">
-# app/config.py
-import os
-from dataclasses import dataclass, field
-from pathlib import Path
-from dotenv import load_dotenv
-
-# 在模块加载时，第一时间加载环境变量
-load_dotenv(override=True)
-
-
-def _get_bool_env(var_name: str, default: bool = False) -> bool:
-    """Helper to get boolean value from environment variables."""
-    value = os.getenv(var_name, str(default)).lower()
-    return value in ("true", "1", "t", "yes", "y")
-
-
-def _get_int_env(var_name: str, default: int) -> int:
-    """Helper to get integer value from environment variables."""
-    value = os.getenv(var_name, str(default))
-    return int(value.split("#")[0].strip())
-
-
-def _get_str_env(var_name: str, default: str) -> str:
-    """Helper to get a cleaned string value from environment variables."""
-    value = os.getenv(var_name, default)
-    return value.split("#")[0].strip()
-
-
-@dataclass(frozen=True)
-class LLMConfig:
-    """配置用于 LLM 客户端"""
-
-    api_key: str
-    base_url: str
-    model: str
-    max_tokens: int
-    timeout: int = _get_int_env("LLM_TIMEOUT", 120)
-    retry_attempts: int = _get_int_env("LLM_RETRY_ATTEMPTS", 3)
-
-
-@dataclass(frozen=True)
-class PathConfig:
-    """统一管理项目中的所有路径"""
-
-    data_dir: Path = Path("data")
-    cache_dir: Path = data_dir / "cache"
-    book_dir: Path = data_dir / "book"
-
-    # 缓存子目录 (用于通用、可丢弃的缓存)
-    cache_llm: Path = cache_dir / "llm"
-    cache_image: Path = cache_dir / "image"
-    cache_audio: Path = cache_dir / "audio"
-
-    def get_book_path(self, book_id: str) -> Path:
-        book_path = self.book_dir / book_id
-        # 在这里动态创建LLM资产目录
-        (book_path / "llm").mkdir(parents=True, exist_ok=True)
-        return book_path
-
-    def __post_init__(self):
-        """初始化后创建所有必要的目录"""
-        self.cache_dir.mkdir(parents=True, exist_ok=True)
-        self.book_dir.mkdir(parents=True, exist_ok=True)
-        self.cache_llm.mkdir(parents=True, exist_ok=True)
-        self.cache_image.mkdir(parents=True, exist_ok=True)
-        self.cache_audio.mkdir(parents=True, exist_ok=True)
-
-
-@dataclass(frozen=True)
-class Settings:
-    """全局应用配置"""
-
-    # 书籍配置
-    book_source: str = _get_str_env("BOOK_SOURCE", "test_novel.txt")
-    custom_book_id: str | None = os.getenv(
-        "CUSTOM_BOOK_ID"
-    )  # os.getenv is ok for optional values
-    cookie: str = _get_str_env("COOKIE", "")  # 用于需要登录才能访问的网站
-
-    # LLM 配置
-    storyboard_llm: LLMConfig = field(
-        default_factory=lambda: LLMConfig(
-            api_key=_get_str_env("STORYBOARD_API_KEY", ""),
-            base_url=_get_str_env("STORYBOARD_API_URL", ""),
-            model=_get_str_env("STORYBOARD_MODEL", "gemini-1.5-flash-latest"),
-            max_tokens=_get_int_env("STORYBOARD_MAX_TOKENS", 8000),
-        )
-    )
-    prompt_llm: LLMConfig = field(
-        default_factory=lambda: LLMConfig(
-            api_key=_get_str_env("PROMPT_API_KEY", ""),
-            base_url=_get_str_env("PROMPT_API_URL", ""),
-            model=_get_str_env("PROMPT_MODEL", "deepseek-v2"),
-            max_tokens=_get_int_env("PROMPT_MAX_TOKENS", 8000),
-        )
-    )
-    # +++ 新增 JSON 修复器 LLM 配置 +++
-    json_repair_llm: LLMConfig = field(
-        default_factory=lambda: LLMConfig(
-            # 默认情况下，可以复用storyboard的配置，但最好用独立的环境变量
-            api_key=_get_str_env("JSON_REPAIR_API_KEY", _get_str_env("STORYBOARD_API_KEY", "")),
-            base_url=_get_str_env("JSON_REPAIR_API_URL", _get_str_env("STORYBOARD_API_URL", "")),
-            model=_get_str_env("JSON_REPAIR_MODEL", "gemini-1.5-flash-latest"),
-            max_tokens=_get_int_env("JSON_REPAIR_MAX_TOKENS", 2048), # 修复任务通常不需要很长的上下文
-        )
-    )
-    # +++ 结束新增部分 +++
-
-    # 图像生成配置
-    # -- NEW: OpenAI Image endpoint settings --
-    openai_image_api_key: str = _get_str_env("OPENAI_IMAGE_API_KEY", "")
-    openai_image_api_url: str = _get_str_env("OPENAI_IMAGE_API_URL", "https://api.openai.com/v1")
-    openai_image_model: str = _get_str_env("OPENAI_IMAGE_MODEL", "dall-e-3")
-
-    image_width: int = _get_int_env("IMAGE_WIDTH", 1024)
-    image_height: int = _get_int_env("IMAGE_HEIGHT", 1024)
-    image_style_prompt: str = _get_str_env(
-        "IMAGE_STYLE_PROMPT",
-        "cinematic, dramatic lighting, detailed, illustration, anime style, 8k",
-    )
-    # 各提供器的并发控制设置
-    openai_image_threads: int = _get_int_env("OPENAI_IMAGE_THREADS", 3)  # OpenAI有更严格的速率限制
-    pollinations_image_threads: int = _get_int_env("POLLINATIONS_IMAGE_THREADS", 8)  # Pollinations可以更高并发
-    # 向后兼容：如果设置了IMAGE_THREADS，则作为两者的默认值
-    image_threads: int = _get_int_env("IMAGE_THREADS", 5)  # 保持向后兼容
-
-    # 音频生成配置
-    edge_tts_voice: str = _get_str_env("EDGE_TTS_VOICE", "zh-CN-YunxiNeural")
-    audio_threads: int = _get_int_env("AUDIO_THREADS", 5)
-
-    # 视频生成配置
-    video_threads: int = _get_int_env("VIDEO_THREADS", 4)
-    video_width: int = _get_int_env("VIDEO_WIDTH", 750)
-    video_height: int = _get_int_env("VIDEO_HEIGHT", 1280)
-
-    # 性能与流程控制
-    max_llm_threads: int = _get_int_env("LLM_THREADS", 3)
-    verbose_logging: bool = _get_bool_env("VERBOSE_LOGGING", True)
-
-    # 路径配置
-    paths: PathConfig = field(default_factory=PathConfig)
-
-    @property
-    def book_id(self) -> str:
-        if self.custom_book_id:
-            return self.custom_book_id
-        if self.book_source.endswith(".txt"):
-            return Path(self.book_source).stem
-        return self.book_source
-
-
-# 创建一个全局单例配置对象
-settings = Settings()
-</file>
-
 <file path="app/stages/storyboard.py">
 # app/stages/storyboard.py
 import re
@@ -2472,6 +2887,162 @@ async def create_storyboard_from_chunks(
         f"分镜和提示词阶段完成。总共成功创建 {len(all_shots_list)} 个分镜。"
     )
     return all_shots_list
+</file>
+
+<file path="app/config.py">
+# app/config.py
+import os
+from dataclasses import dataclass, field
+from pathlib import Path
+from dotenv import load_dotenv
+
+# 在模块加载时，第一时间加载环境变量
+load_dotenv(override=True)
+
+
+def _get_bool_env(var_name: str, default: bool = False) -> bool:
+    """Helper to get boolean value from environment variables."""
+    value = os.getenv(var_name, str(default)).lower()
+    return value in ("true", "1", "t", "yes", "y")
+
+
+def _get_int_env(var_name: str, default: int) -> int:
+    """Helper to get integer value from environment variables."""
+    value = os.getenv(var_name, str(default))
+    return int(value.split("#")[0].strip())
+
+
+def _get_str_env(var_name: str, default: str) -> str:
+    """Helper to get a cleaned string value from environment variables."""
+    value = os.getenv(var_name, default)
+    return value.split("#")[0].strip()
+
+
+@dataclass(frozen=True)
+class LLMConfig:
+    """配置用于 LLM 客户端"""
+
+    api_key: str
+    base_url: str
+    model: str
+    max_tokens: int
+    timeout: int = _get_int_env("LLM_TIMEOUT", 120)
+    retry_attempts: int = _get_int_env("LLM_RETRY_ATTEMPTS", 3)
+
+
+@dataclass(frozen=True)
+class PathConfig:
+    """统一管理项目中的所有路径"""
+
+    data_dir: Path = Path("data")
+    cache_dir: Path = data_dir / "cache"
+    book_dir: Path = data_dir / "book"
+
+    # 缓存子目录 (用于通用、可丢弃的缓存)
+    cache_llm: Path = cache_dir / "llm"
+    cache_image: Path = cache_dir / "image"
+    cache_audio: Path = cache_dir / "audio"
+
+    def get_book_path(self, book_id: str) -> Path:
+        book_path = self.book_dir / book_id
+        # 在这里动态创建LLM资产目录
+        (book_path / "llm").mkdir(parents=True, exist_ok=True)
+        return book_path
+
+    def __post_init__(self):
+        """初始化后创建所有必要的目录"""
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
+        self.book_dir.mkdir(parents=True, exist_ok=True)
+        self.cache_llm.mkdir(parents=True, exist_ok=True)
+        self.cache_image.mkdir(parents=True, exist_ok=True)
+        self.cache_audio.mkdir(parents=True, exist_ok=True)
+
+
+@dataclass(frozen=True)
+class Settings:
+    """全局应用配置"""
+
+    # 书籍配置
+    book_source: str = _get_str_env("BOOK_SOURCE", "test_novel.txt")
+    custom_book_id: str | None = os.getenv(
+        "CUSTOM_BOOK_ID"
+    )  # os.getenv is ok for optional values
+    cookie: str = _get_str_env("COOKIE", "")  # 用于需要登录才能访问的网站
+
+    # LLM 配置
+    storyboard_llm: LLMConfig = field(
+        default_factory=lambda: LLMConfig(
+            api_key=_get_str_env("STORYBOARD_API_KEY", ""),
+            base_url=_get_str_env("STORYBOARD_API_URL", ""),
+            model=_get_str_env("STORYBOARD_MODEL", "gemini-1.5-flash-latest"),
+            max_tokens=_get_int_env("STORYBOARD_MAX_TOKENS", 8000),
+        )
+    )
+    prompt_llm: LLMConfig = field(
+        default_factory=lambda: LLMConfig(
+            api_key=_get_str_env("PROMPT_API_KEY", ""),
+            base_url=_get_str_env("PROMPT_API_URL", ""),
+            model=_get_str_env("PROMPT_MODEL", "deepseek-v2"),
+            max_tokens=_get_int_env("PROMPT_MAX_TOKENS", 8000),
+        )
+    )
+    # +++ 新增 JSON 修复器 LLM 配置 +++
+    json_repair_llm: LLMConfig = field(
+        default_factory=lambda: LLMConfig(
+            # 默认情况下，可以复用storyboard的配置，但最好用独立的环境变量
+            api_key=_get_str_env("JSON_REPAIR_API_KEY", _get_str_env("STORYBOARD_API_KEY", "")),
+            base_url=_get_str_env("JSON_REPAIR_API_URL", _get_str_env("STORYBOARD_API_URL", "")),
+            model=_get_str_env("JSON_REPAIR_MODEL", "gemini-1.5-flash-latest"),
+            max_tokens=_get_int_env("JSON_REPAIR_MAX_TOKENS", 2048), # 修复任务通常不需要很长的上下文
+        )
+    )
+    # +++ 结束新增部分 +++
+
+    # 图像生成配置
+    # -- NEW: OpenAI Image endpoint settings --
+    openai_image_api_key: str = _get_str_env("OPENAI_IMAGE_API_KEY", "")
+    openai_image_api_url: str = _get_str_env("OPENAI_IMAGE_API_URL", "https://api.openai.com/v1")
+    openai_image_model: str = _get_str_env("OPENAI_IMAGE_MODEL", "dall-e-3")
+
+    image_width: int = _get_int_env("IMAGE_WIDTH", 1024)
+    image_height: int = _get_int_env("IMAGE_HEIGHT", 1024)
+    image_style_prompt: str = _get_str_env(
+        "IMAGE_STYLE_PROMPT",
+        "cinematic, dramatic lighting, detailed, illustration, anime style, 8k",
+    )
+    # 各提供器的并发控制设置
+    openai_image_threads: int = _get_int_env("OPENAI_IMAGE_THREADS", 3)  # OpenAI有更严格的速率限制
+    pollinations_image_threads: int = _get_int_env("POLLINATIONS_IMAGE_THREADS", 8)  # Pollinations可以更高并发
+    # 向后兼容：如果设置了IMAGE_THREADS，则作为两者的默认值
+    image_threads: int = _get_int_env("IMAGE_THREADS", 5)  # 保持向后兼容
+
+    # 音频生成配置
+    edge_tts_voice: str = _get_str_env("EDGE_TTS_VOICE", "zh-CN-YunxiNeural")
+    audio_threads: int = _get_int_env("AUDIO_THREADS", 5)
+
+    # 视频生成配置
+    video_threads: int = _get_int_env("VIDEO_THREADS", 4)
+    video_width: int = _get_int_env("VIDEO_WIDTH", 750)
+    video_height: int = _get_int_env("VIDEO_HEIGHT", 1280)
+
+    # 性能与流程控制
+    max_llm_threads: int = _get_int_env("LLM_THREADS", 3)
+    verbose_logging: bool = _get_bool_env("VERBOSE_LOGGING", True)
+
+    # 路径配置
+    paths: PathConfig = field(default_factory=PathConfig)
+
+    @property
+    def book_id(self) -> str:
+        if self.custom_book_id:
+            return self.custom_book_id
+        if self.book_source.endswith(".txt"):
+            return Path(self.book_source).stem
+        return self.book_source
+
+
+# 创建一个全局单例配置对象
+settings = Settings()
 </file>
 
 <file path="app/llm_client.py">

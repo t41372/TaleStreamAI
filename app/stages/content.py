@@ -42,6 +42,10 @@ def load_and_chunk_content(
     if source_file:
         logger.info(f"从本地文件加载: {source_file}")
         full_text = _load_local_content(source_file)
+        
+        # 🌟 供 restore_punct 阶段使用
+        (book_path / "full_text.txt").write_text(full_text, encoding="utf-8")
+        logger.info(f"完整文本已保存至: {book_path / 'full_text.txt'}")
     else:
         # 当前重构专注于本地文件。网络逻辑可以作为未来的增强功能。
         # raise NotImplementedError("网络内容获取功能当前未激活。")
